@@ -1,104 +1,75 @@
 # MACS - Multi Agent Control System
 
-A tmux-based orchestration framework for controlling AI coding agents across multiple terminals. Enables a "controller" agent to oversee and direct a "worker" agent through structured request/response protocols.
+A tmux-based orchestration framework for controlling AI coding agents across multiple terminals. Enables a "controller" agent to oversee and direct a "worker" agent.
 
 ## Overview
 
 MACS provides infrastructure for multi-agent AI workflows where:
 - **Controller Terminal** - Runs a supervisory agent that makes decisions and provides oversight
 - **Worker Terminal** - Runs a task-execution agent that performs the actual work
-- **Bridge** - Monitors communication between terminals, extracts requests, and routes responses
 
 ```
 ┌─────────────────────┐     ┌─────────────────────┐
 │  Controller (A)     │     │    Worker (B)       │
-│  - Makes decisions  │◄───►│  - Executes tasks   │
+│  - Makes decisions  │────►│  - Executes tasks   │
 │  - Reviews output   │     │  - Reports status   │
-│  - Provides guidance│     │  - Asks questions   │
+│  - Sends commands   │◄────│  - Asks questions   │
 └─────────────────────┘     └─────────────────────┘
-         │                           │
-         └───────────┬───────────────┘
-                     │
-              ┌──────▼──────┐
-              │   Bridge    │
-              │  (Python)   │
-              └─────────────┘
+        │                           │
+        │   snapshot.sh ◄───────────┘ (read output)
+        │   send.sh ────────────────► (send commands)
+        │   status.sh ◄─────────────┘ (check busy/idle)
 ```
 
 ## Quick Start
 
 ### Prerequisites
 - tmux
-- Python 3.8+
-- Codex CLI
+- Codex CLI (or Claude Code)
 
 ### Installation
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_ORG/macs.git
+git clone https://github.com/dickymoore/macs.git
 cd macs
 
-# Copy prompts to your project (or use as reference)
-cp -r .codex/prompts/* ~/.codex/prompts/
+# Copy prompts to your Codex prompts directory
+mkdir -p ~/.codex/prompts
+cp .codex/prompts/*.md ~/.codex/prompts/
+
+# Make scripts executable
+chmod +x tools/tmux_bridge/*.sh
 ```
 
 ### Basic Usage
 
-1. **Start tmux with two panes**:
+1. **Start tmux with two windows**:
 ```bash
-tmux new-session -s macs
-# Split: Ctrl+b %
+./tools/tmux_bridge/start_controller.sh macs
+./tools/tmux_bridge/start_worker.sh macs
+tmux attach -t macs
 ```
 
-2. **In the worker pane**, start Codex:
+2. **In the worker window** (Ctrl+b n to switch), start Codex:
 ```bash
 codex
 ```
 
-3. **In the controller pane**, load the controller prompt:
+3. **In the controller window**, start Codex and load the controller prompt:
 ```bash
 codex
 /prompts:controller
 ```
 
-4. **Start the bridge** (from a third terminal or background):
-```bash
-./tools/tmux_bridge/bridge.py --session macs
-```
+4. **The controller** can now:
+   - Read worker output: `./tools/tmux_bridge/snapshot.sh`
+   - Send commands: `./tools/tmux_bridge/send.sh "your instruction"`
+   - Check status: `./tools/tmux_bridge/status.sh`
 
-The bridge will monitor the worker terminal for `<<CONTROLLER_REQUEST>>` blocks and route them to the controller.
+## How It Works
 
-## Architecture
-
-### Request/Response Protocol
-
-The worker agent can request controller input using delimited blocks:
-
-```
-<<CONTROLLER_REQUEST>>
-Question or status update here.
-Options or context if needed.
-<<CONTROLLER_REQUEST_END>>
-```
-
-The controller responds with:
-
-```
-<<CONTROLLER_RESPONSE>>
-WORKER INSTRUCTIONS:
-Step-by-step guidance here.
-
-NOTES:
-Context or rationale (not sent to worker).
-<<CONTROLLER_RESPONSE_END>>
-```
-
-### Bridge Modes
-
-- **auto** (default) - Bridge invokes controller agent automatically
-- **manual** - Bridge writes requests to inbox, waits for response files
-- **codex-interactive** - Bridge sends requests to a live Codex session
+The controller agent uses shell scripts to interact with the worker terminal:
 
 ### Helper Scripts
 
@@ -108,28 +79,31 @@ Context or rationale (not sent to worker).
 | `send.sh` | Send text/commands to worker terminal |
 | `status.sh` | Check if worker is busy (running) or idle |
 | `set_target.sh` | Pin the worker pane for subsequent commands |
+| `notify.sh` | Play sound to alert human |
 
-## Configuration
+### Controller Workflow
 
-### Codex Config (`.codex/config.toml`)
+1. **Snapshot** - Read worker output to see current state
+2. **Decide** - Determine what instruction to give
+3. **Send** - Send command to worker via `send.sh`
+4. **Wait** - Poll with backoff until worker responds
+5. **Repeat** - Continue until task complete or blocked
 
-```toml
-model = "your-preferred-model"
+The controller prompt (`.codex/prompts/controller.md`) contains detailed operating principles including:
+- Polling/backoff schedules
+- Busy detection rules
+- Looping behavior (stay in loop until blocked or complete)
+- When to notify the human
 
-[features]
-unified_exec = true
-shell_snapshot = true
-```
+## Customization
 
-### Customizing the Controller Prompt
+Copy `.codex/prompts/controller.md` to your project and add project-specific rules at the bottom:
+- Repository structure
+- CI/CD requirements
+- Security policies
+- Team conventions
 
-Copy `.codex/prompts/controller.md` to your project and customize:
-- Decision priorities
-- Security invariants
-- Project-specific rules
-- Communication protocols
-
-See `examples/project-rules/` for examples.
+See `examples/project-rules/` for templates.
 
 ## Documentation
 
