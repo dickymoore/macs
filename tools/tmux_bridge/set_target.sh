@@ -11,6 +11,16 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 session=""
 pane=""
 label="${TARGET_PANE_LABEL:-worker}"
+socket="${TMUX_SOCKET:-}"
+tmux_socket_args=()
+
+if [ -n "$socket" ]; then
+  tmux_socket_args=(-S "$socket")
+fi
+
+tmux_cmd() {
+  tmux "${tmux_socket_args[@]}" "$@"
+}
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -26,8 +36,13 @@ while [ $# -gt 0 ]; do
       label="$2"
       shift 2
       ;;
+    --socket)
+      socket="$2"
+      tmux_socket_args=(-S "$socket")
+      shift 2
+      ;;
     --help|-h)
-      echo "Usage: $0 [--session NAME] [--pane %X] [--label TEXT]" >&2
+      echo "Usage: $0 [--session NAME] [--pane %X] [--label TEXT] [--socket PATH]" >&2
       exit 0
       ;;
     *)
@@ -48,10 +63,20 @@ if [ -n "$session" ]; then
 fi
 
 if [ -z "$pane" ]; then
-  pane="$(tmux list-panes "${list_scope[@]}" -F '#{pane_id} #{window_name} #{pane_title} #{pane_current_command}' | $rg_cmd "$label" | head -n1 | awk '{print $1}' || true)"
+  pane_listing="$(tmux_cmd list-panes "${list_scope[@]}" -F '#{pane_id} #{window_name} #{pane_title} #{pane_current_command}' 2>&1)" || {
+    echo "tmux error: $pane_listing" >&2
+    exit 1
+  }
+  pane="$(printf "%s\n" "$pane_listing" | $rg_cmd "$label" | head -n1 | awk '{print $1}' || true)"
 fi
 if [ -z "$pane" ] && [ "$label" != "codex" ]; then
-  pane="$(tmux list-panes "${list_scope[@]}" -F '#{pane_id} #{pane_current_command}' | $rg_cmd "$label" | head -n1 | awk '{print $1}' || true)"
+  if [ -z "${pane_listing:-}" ]; then
+    pane_listing="$(tmux_cmd list-panes "${list_scope[@]}" -F '#{pane_id} #{window_name} #{pane_title} #{pane_current_command}' 2>&1)" || {
+      echo "tmux error: $pane_listing" >&2
+      exit 1
+    }
+  fi
+  pane="$(printf "%s\n" "$pane_listing" | $rg_cmd "$label" | head -n1 | awk '{print $1}' || true)"
 fi
 
 if [ -z "$pane" ]; then

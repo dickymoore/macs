@@ -37,31 +37,44 @@ chmod +x tools/tmux_bridge/*.py
 
 ## Basic Usage
 
-### Step 1: Start a TMux Session
+### Step 1: Start a TMux Session (Worker)
 
 ```bash
-# Create session with controller and worker windows
-./tools/tmux_bridge/start_controller.sh macs
+# Create session with a worker window
 ./tools/tmux_bridge/start_worker.sh macs
-
-# Attach to the session
-tmux attach -t macs
+# start_worker auto-attaches by default; use --no-attach to skip
 ```
 
-### Step 2: Start Codex in Both Windows
+### Step 2: Start Codex in the Worker Window
 
 In the **worker** window (`Ctrl+b` then `n` to switch):
 ```bash
 codex
 ```
 
-In the **controller** window:
-```bash
-codex
-/prompts:controller
-```
+### Step 3: Start the Controller in a Separate Terminal
 
-### Step 3: Start the Bridge
+From your project repo root:
+```bash
+../macs/tools/tmux_bridge/start_controller.sh
+# If you copied the scripts into your repo:
+# ./tools/tmux_bridge/start_controller.sh
+# Or from anywhere:
+# ../macs/tools/tmux_bridge/start_controller.sh --repo /path/to/your-repo
+# Skip copying skills:
+# ../macs/tools/tmux_bridge/start_controller.sh --skip-skills
+#
+# If tmux socket auto-detect fails:
+# ../macs/tools/tmux_bridge/start_controller.sh --tmux-session macs
+# ../macs/tools/tmux_bridge/start_controller.sh --tmux-socket /tmp/tmux-<uid>/default
+# To bypass tmux detection (not recommended):
+# ../macs/tools/tmux_bridge/start_controller.sh --no-tmux-detect
+```
+This writes `.codex/macs-path.txt` in the repo so the controller can locate `tmux_bridge` tools even when they are not vendored.
+It also attempts to record a tmux socket in `.codex/tmux-socket.txt` so controller commands can reach the correct tmux server.
+If you pass `--tmux-session`, it records `.codex/tmux-session.txt` so commands can target the right session automatically.
+
+### Step 4: Start the Bridge
 
 From a separate terminal (or tmux pane):
 ```bash
