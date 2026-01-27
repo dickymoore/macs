@@ -1,0 +1,111 @@
+# MACS TMux Bridge
+
+The tmux bridge enables multi-terminal AI agent orchestration by monitoring communication between a controller and worker terminal.
+
+## Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `bridge.py` | Main orchestration bridge (Python) |
+| `snapshot.sh` | Capture recent output from worker terminal |
+| `send.sh` | Send text/commands to worker terminal |
+| `status.sh` | Check if worker is busy or idle |
+| `set_target.sh` | Pin the target pane for subsequent commands |
+| `start_controller.sh` | Create/select controller window in tmux |
+| `start_worker.sh` | Create/select worker window in tmux |
+| `controller_prompt.txt` | System prompt for controller LLM |
+
+## Quick Start
+
+```bash
+# 1. Start tmux session with both windows
+./start_controller.sh macs
+./start_worker.sh macs
+
+# 2. Attach to the session
+tmux attach -t macs
+
+# 3. In worker window: start codex
+codex
+
+# 4. In controller window: start codex and load prompt
+codex
+/prompts:controller
+
+# 5. From a separate terminal: start the bridge
+./bridge.py --session macs
+```
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TARGET_PANE_LABEL` | `worker` | Label to search for when discovering panes |
+| `TARGET_PANE_LINES` | `200` | Lines to capture in snapshots |
+| `TARGET_PANE_BUSY_LINES` | `40` | Recent lines to check for busy indicator |
+| `TARGET_PANE_SUBMIT_KEYS` | `Enter,C-m` | Keys to send after input |
+| `TARGET_PANE_TYPE_DELAY_MS` | `400` | Delay after typing before submit |
+| `TARGET_PANE_GUARD_BUSY` | `1` | Refuse to send if worker is busy |
+
+## Bridge Modes
+
+### Auto Mode (default)
+The bridge automatically invokes the controller agent via Codex when requests are detected.
+
+```bash
+./bridge.py --mode auto --controller-backend codex-interactive
+```
+
+### Manual Mode
+The bridge writes requests to `inbox/` and waits for response files in `outbox/`.
+
+```bash
+./bridge.py --mode manual
+```
+
+### Dry Run
+Test request detection without sending responses.
+
+```bash
+./bridge.py --dry-run
+```
+
+## Request/Response Protocol
+
+Worker agents can request controller input using delimited blocks:
+
+```
+<<CONTROLLER_REQUEST>>
+I've completed the authentication changes.
+Should I proceed to implement the rate limiting?
+<<CONTROLLER_REQUEST_END>>
+```
+
+The controller responds with:
+
+```
+<<CONTROLLER_RESPONSE>>
+WORKER INSTRUCTIONS:
+Yes, proceed with rate limiting.
+Use the token bucket algorithm.
+Limit to 100 requests per minute per user.
+
+NOTES:
+Good progress. The auth changes look correct.
+<<CONTROLLER_RESPONSE_END>>
+```
+
+## Heuristic Mode
+
+When `--heuristic` is enabled (default), the bridge also triggers on:
+- Lines ending with `?`
+- Phrases like "what would you like", "should i", "ready to proceed"
+- Completion indicators like "done", "complete", "finished"
+
+Disable with `--no-heuristic`.
+
+## Directories
+
+- `inbox/` - Incoming requests (written by bridge)
+- `outbox/` - Responses (read by bridge in manual mode)
+- `archive/` - Historical requests and responses

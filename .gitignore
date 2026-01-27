@@ -1,0 +1,38 @@
+# MACS .gitignore
+
+# Runtime files
+tools/tmux_bridge/inbox/
+tools/tmux_bridge/outbox/
+tools/tmux_bridge/archive/
+tools/tmux_bridge/target_pane.txt
+
+# Logs
+*.log
+/tmp/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.so
+.eggs/
+*.egg-info/
+.venv/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Codex
+.codex/history.jsonl
+.codex/sessions/
