@@ -40,6 +40,11 @@ codex
 # /path/to/macs/tools/tmux_bridge/start_controller.sh --tmux-socket /tmp/tmux-<uid>/default
 # to bypass tmux detection (not recommended):
 # /path/to/macs/tools/tmux_bridge/start_controller.sh --no-tmux-detect
+# if Codex can't access the tmux socket from inside its sandbox:
+# /path/to/macs/tools/tmux_bridge/start_controller.sh --codex-args "--sandbox danger-full-access"
+# or set MACS_CODEX_ARGS="--sandbox danger-full-access"
+# to only install prompts/skills without launching Codex:
+# /path/to/macs/tools/tmux_bridge/start_controller.sh --no-codex
 
 # This writes .codex/macs-path.txt so the controller can find tmux_bridge tools.
 # If you pass --tmux-session it writes .codex/tmux-session.txt for auto-targeting.
@@ -59,6 +64,7 @@ codex
 | `TARGET_PANE_TYPE_DELAY_MS` | `400` | Delay after typing before submit |
 | `TARGET_PANE_GUARD_BUSY` | `1` | Refuse to send if worker is busy |
 | `TMUX_SOCKET` | (unset) | Optional tmux socket path for all scripts (`--socket` flag) |
+| `MACS_CODEX_ARGS` | (unset) | Extra args to pass to `codex` from `start_controller.sh` |
 
 ## Bridge Modes
 
@@ -122,3 +128,11 @@ Disable with `--no-heuristic`.
 - `inbox/` - Incoming requests (written by bridge)
 - `outbox/` - Responses (read by bridge in manual mode)
 - `archive/` - Historical requests and responses
+
+## Testing
+
+Run the tmux bridge smoke test (creates a temporary tmux server and cleans up after itself):
+
+```bash
+./tools/tmux_bridge/tests/smoke.sh
+```

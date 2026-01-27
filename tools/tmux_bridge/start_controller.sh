@@ -11,9 +11,12 @@ SKIP_SKILLS=0
 TMUX_SOCKET_OVERRIDE=""
 TMUX_SESSION=""
 TMUX_DETECT=1
+RUN_CODEX=1
+CODEX_ARGS_RAW="${MACS_CODEX_ARGS:-}"
+CODEX_ARGS=()
 
 usage() {
-  echo "Usage: $0 [--repo PATH] [--prompt PATH] [--skills PATH] [--skip-skills] [--force] [--tmux-socket PATH] [--tmux-session NAME] [--no-tmux-detect]" >&2
+  echo "Usage: $0 [--repo PATH] [--prompt PATH] [--skills PATH] [--skip-skills] [--force] [--tmux-socket PATH] [--tmux-session NAME] [--no-tmux-detect] [--codex-args \"...\"] [--no-codex]" >&2
 }
 
 while [ $# -gt 0 ]; do
@@ -67,6 +70,28 @@ while [ $# -gt 0 ]; do
       TMUX_DETECT=0
       shift
       ;;
+    --codex-args)
+      if [ $# -lt 2 ]; then
+        echo "Missing value for --codex-args" >&2
+        usage
+        exit 1
+      fi
+      CODEX_ARGS_RAW="$2"
+      shift 2
+      ;;
+    --codex-arg)
+      if [ $# -lt 2 ]; then
+        echo "Missing value for --codex-arg" >&2
+        usage
+        exit 1
+      fi
+      CODEX_ARGS+=("$2")
+      shift 2
+      ;;
+    --no-codex)
+      RUN_CODEX=0
+      shift
+      ;;
     --skip-skills)
       SKIP_SKILLS=1
       shift
@@ -97,9 +122,11 @@ if [ ! -f "$SRC_PROMPT" ]; then
   exit 1
 fi
 
-if ! command -v codex >/dev/null 2>&1; then
-  echo "codex not found in PATH" >&2
-  exit 1
+if [ "$RUN_CODEX" -eq 1 ]; then
+  if ! command -v codex >/dev/null 2>&1; then
+    echo "codex not found in PATH" >&2
+    exit 1
+  fi
 fi
 
 mkdir -p "$TARGET_DIR/.codex/prompts"
@@ -370,4 +397,10 @@ elif [ "$SKIP_SKILLS" -eq 0 ]; then
 fi
 
 cd "$TARGET_DIR"
-exec codex "/prompts:controller"
+if [ "$RUN_CODEX" -eq 1 ]; then
+  if [ "${#CODEX_ARGS[@]}" -eq 0 ] && [ -n "$CODEX_ARGS_RAW" ]; then
+    read -r -a CODEX_ARGS <<< "$CODEX_ARGS_RAW"
+  fi
+  exec codex "${CODEX_ARGS[@]}" "/prompts:controller"
+fi
+echo "Controller setup complete. Skipping codex launch (--no-codex)."

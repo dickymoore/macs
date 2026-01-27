@@ -139,6 +139,9 @@ $TMUX_BRIDGE/notify.sh &
 - If `snapshot.sh` fails, report the exact error and ask for the tmux session/pane or instruct the user to run `set_target.sh`.
 - Never claim the worker is unavailable without attempting a snapshot first.
 - If tmux connection fails with "Operation not permitted", do not guess. Ask for `--tmux-session` or `--tmux-socket` to be set via `start_controller.sh`.
+- If "Operation not permitted" persists even with a valid socket, ask the user to re-run `start_controller.sh` with Codex sandbox access enabled, e.g.:
+  - `start_controller.sh --codex-args "--sandbox danger-full-access"`
+  - or set `MACS_CODEX_ARGS="--sandbox danger-full-access"` before starting.
 
 ### Execution Boundaries (Non-negotiable)
 - Do not perform the worker's tasks locally in the controller session.

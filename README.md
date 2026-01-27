@@ -70,6 +70,11 @@ codex
 # ../macs/tools/tmux_bridge/start_controller.sh --tmux-socket /tmp/tmux-<uid>/default
 # To bypass tmux detection (not recommended):
 # ../macs/tools/tmux_bridge/start_controller.sh --no-tmux-detect
+# If Codex can't access the tmux socket from inside its sandbox:
+# ../macs/tools/tmux_bridge/start_controller.sh --codex-args "--sandbox danger-full-access"
+# Or set MACS_CODEX_ARGS="--sandbox danger-full-access"
+# To only install prompts/skills without launching Codex:
+# ../macs/tools/tmux_bridge/start_controller.sh --no-codex
 ```
 This writes `.codex/macs-path.txt` in the repo so the controller can locate `tmux_bridge` tools even when they are not vendored.
 It also attempts to record a tmux socket in `.codex/tmux-socket.txt` so controller commands can reach the correct tmux server.
