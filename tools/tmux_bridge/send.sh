@@ -22,6 +22,17 @@ type_delay_ms="${TARGET_PANE_TYPE_DELAY_MS:-400}"
 literal_mode=0
 guard_busy="${TARGET_PANE_GUARD_BUSY:-1}"
 force_send=0
+socket="${TMUX_SOCKET:-}"
+tmux_socket_args=()
+submit_key=""
+
+if [ -n "$socket" ]; then
+  tmux_socket_args=(-S "$socket")
+fi
+
+tmux_cmd() {
+  tmux "${tmux_socket_args[@]}" "$@"
+}
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -58,6 +69,11 @@ while [ $# -gt 0 ]; do
       submit_keys="$2"
       shift 2
       ;;
+    --socket)
+      socket="$2"
+      tmux_socket_args=(-S "$socket")
+      shift 2
+      ;;
     --submit-repeat)
       submit_repeat="$2"
       shift 2
@@ -79,7 +95,7 @@ while [ $# -gt 0 ]; do
       shift
       ;;
     --help|-h)
-      echo "Usage: $0 [--session NAME] [--pane %X] [--label TEXT] [message...]" >&2
+      echo "Usage: $0 [--session NAME] [--pane %X] [--label TEXT] [--socket PATH] [message...]" >&2
       exit 0
       ;;
     *)
@@ -103,6 +119,11 @@ else
   if printf "%s" "$message" | grep -q '\\n' && ! printf "%s" "$message" | grep -q $'\n'; then
     message="$(printf "%b" "$message")"
   fi
+fi
+
+submit_key="${submit_keys%%,*}"
+if [ -z "$submit_key" ]; then
+  submit_key="Enter"
 fi
 
 # Trim leading blank lines to avoid sending accidental empty submits.
@@ -130,10 +151,10 @@ if [ -z "$pane" ]; then
   fi
 fi
 if [ -z "$pane" ]; then
-  pane="$(tmux list-panes "${list_scope[@]}" -F '#{pane_id} #{window_name} #{pane_title} #{pane_current_command}' | $rg_cmd "$label" | head -n1 | awk '{print $1}' || true)"
+  pane="$(tmux_cmd list-panes "${list_scope[@]}" -F '#{pane_id} #{window_name} #{pane_title} #{pane_current_command}' | $rg_cmd "$label" | head -n1 | awk '{print $1}' || true)"
 fi
 if [ -z "$pane" ] && [ "$label" != "codex" ]; then
-  pane="$(tmux list-panes "${list_scope[@]}" -F '#{pane_id} #{pane_current_command}' | $rg_cmd "$label" | head -n1 | awk '{print $1}' || true)"
+  pane="$(tmux_cmd list-panes "${list_scope[@]}" -F '#{pane_id} #{pane_current_command}' | $rg_cmd "$label" | head -n1 | awk '{print $1}' || true)"
 fi
 
 if [ -z "$pane" ]; then
@@ -142,7 +163,7 @@ if [ -z "$pane" ]; then
 fi
 
 if [ "$guard_busy" -eq 1 ] && [ "$force_send" -eq 0 ]; then
-  if "$ROOT_DIR/status.sh" --pane "$pane" --exit-code >/dev/null 2>&1; then
+  if "$ROOT_DIR/status.sh" --pane "$pane" --exit-code ${socket:+--socket "$socket"} >/dev/null 2>&1; then
     true
   else
     echo "Worker is busy (esc to interrupt). Refusing to send. Use --force to override." >&2
@@ -154,14 +175,14 @@ send_line() {
   local pane_id="$1"
   local line="$2"
   if [ ${#line} -le 1000 ]; then
-    tmux send-keys -t "$pane_id" -- "$line" "$submit_key"
+    tmux_cmd send-keys -t "$pane_id" -- "$line" "$submit_key"
     return
   fi
   local buf_name="macs-bridge-$$"
-  printf "%s" "$line" | tmux load-buffer -b "$buf_name" -
-  tmux paste-buffer -t "$pane_id" -b "$buf_name"
-  tmux delete-buffer -b "$buf_name" >/dev/null 2>&1 || true
-  tmux send-keys -t "$pane_id" "$submit_key"
+  printf "%s" "$line" | tmux_cmd load-buffer -b "$buf_name" -
+  tmux_cmd paste-buffer -t "$pane_id" -b "$buf_name"
+  tmux_cmd delete-buffer -b "$buf_name" >/dev/null 2>&1 || true
+  tmux_cmd send-keys -t "$pane_id" "$submit_key"
 }
 
 if [ "$line_mode" -eq 1 ]; then
@@ -170,12 +191,12 @@ if [ "$line_mode" -eq 1 ]; then
   done <<<"$message"
 elif [ "$submit_after" -eq 1 ]; then
   if [ "$literal_mode" -eq 1 ] || [ "${#message}" -le 4000 ]; then
-    tmux send-keys -t "$pane" -l -- "$message"
+    tmux_cmd send-keys -t "$pane" -l -- "$message"
   else
     buf_name="macs-bridge-$$"
-    printf "%s" "$message" | tmux load-buffer -b "$buf_name" -
-    tmux paste-buffer -t "$pane" -b "$buf_name"
-    tmux delete-buffer -b "$buf_name" >/dev/null 2>&1 || true
+    printf "%s" "$message" | tmux_cmd load-buffer -b "$buf_name" -
+    tmux_cmd paste-buffer -t "$pane" -b "$buf_name"
+    tmux_cmd delete-buffer -b "$buf_name" >/dev/null 2>&1 || true
   fi
   if [ "$type_delay_ms" -gt 0 ]; then
     sleep "$(awk "BEGIN {print $type_delay_ms/1000}")"
@@ -184,7 +205,7 @@ elif [ "$submit_after" -eq 1 ]; then
   while [ "$i" -lt "$submit_repeat" ]; do
     IFS=',' read -r -a submit_list <<<"$submit_keys"
     for key in "${submit_list[@]}"; do
-      tmux send-keys -t "$pane" "$key"
+      tmux_cmd send-keys -t "$pane" "$key"
       if [ "$submit_delay_ms" -gt 0 ]; then
         sleep "$(awk "BEGIN {print $submit_delay_ms/1000}")"
       fi

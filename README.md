@@ -44,11 +44,13 @@ chmod +x tools/tmux_bridge/*.sh
 
 ### Basic Usage
 
-1. **Start tmux with two windows**:
+1. **Start tmux with a worker window**:
 ```bash
-./tools/tmux_bridge/start_controller.sh macs
 ./tools/tmux_bridge/start_worker.sh macs
-tmux attach -t macs
+# start_worker auto-attaches by default; use --no-attach to skip
+# start_worker auto-launches codex in a new worker pane:
+#   CODEX_HOME="<repo>/.codex" codex --yolo
+# use --no-codex to skip or --start-codex to force in an existing pane
 ```
 
 2. **In the worker window** (Ctrl+b n to switch), start Codex:
@@ -56,16 +58,38 @@ tmux attach -t macs
 codex
 ```
 
-3. **In the controller window**, start Codex and load the controller prompt:
+3. **In a separate controller terminal** (from your project repo root), install the controller prompt + skills and start Codex:
 ```bash
-codex
-/prompts:controller
+../macs/tools/tmux_bridge/start_controller.sh
+# If you copied the scripts into your repo:
+# ./tools/tmux_bridge/start_controller.sh
+# Or from anywhere:
+# ../macs/tools/tmux_bridge/start_controller.sh --repo /path/to/your-repo
+# Skip copying skills:
+# ../macs/tools/tmux_bridge/start_controller.sh --skip-skills
+#
+# If tmux socket auto-detect fails:
+# ../macs/tools/tmux_bridge/start_controller.sh --tmux-session macs
+# ../macs/tools/tmux_bridge/start_controller.sh --tmux-socket /tmp/tmux-<uid>/default
+# To bypass tmux detection (not recommended):
+# ../macs/tools/tmux_bridge/start_controller.sh --no-tmux-detect
+# If Codex can't access the tmux socket from inside its sandbox:
+# ../macs/tools/tmux_bridge/start_controller.sh --codex-args "--sandbox danger-full-access"
+# Or set MACS_CODEX_ARGS="--sandbox danger-full-access"
+# To only install prompts/skills without launching Codex:
+# ../macs/tools/tmux_bridge/start_controller.sh --no-codex
 ```
+This writes `.codex/macs-path.txt` in the repo so the controller can locate `tmux_bridge` tools even when they are not vendored.
+It also attempts to record a tmux socket in `.codex/tmux-socket.txt` so controller commands can reach the correct tmux server.
+If you pass `--tmux-session`, it records `.codex/tmux-session.txt` so commands can target the right session automatically.
 
 4. **The controller** can now:
    - Read worker output: `./tools/tmux_bridge/snapshot.sh`
    - Send commands: `./tools/tmux_bridge/send.sh "your instruction"`
    - Check status: `./tools/tmux_bridge/status.sh`
+
+The controller prompt also installs a wrapper for cleaner commands:
+`./.codex/tmux-bridge.sh snapshot|send|status|set_target|notify`
 
 ## How It Works
 

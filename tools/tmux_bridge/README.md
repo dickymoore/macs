@@ -11,28 +11,51 @@ The tmux bridge enables multi-terminal AI agent orchestration by monitoring comm
 | `send.sh` | Send text/commands to worker terminal |
 | `status.sh` | Check if worker is busy or idle |
 | `set_target.sh` | Pin the target pane for subsequent commands |
-| `start_controller.sh` | Create/select controller window in tmux |
+| `start_controller.sh` | Install controller prompt + skills into a repo and launch Codex with `/prompts:controller` |
 | `start_worker.sh` | Create/select worker window in tmux |
 | `controller_prompt.txt` | System prompt for controller LLM |
 
 ## Quick Start
 
 ```bash
-# 1. Start tmux session with both windows
-./start_controller.sh macs
+# 1. Start tmux session with a worker window
 ./start_worker.sh macs
 
-# 2. Attach to the session
-tmux attach -t macs
+# start_worker auto-attaches by default; use --no-attach to skip
+# start_worker auto-launches codex in a new worker pane:
+#   CODEX_HOME="<repo>/.codex" codex --yolo
+# use --no-codex to skip or --start-codex to force in an existing pane
+# use --reset-session to clear an existing tmux session first
 
-# 3. In worker window: start codex
+# 2. In worker window: start codex
 codex
 
-# 4. In controller window: start codex and load prompt
-codex
-/prompts:controller
+# 3. In a controller terminal/window (from your project repo root):
+/path/to/macs/tools/tmux_bridge/start_controller.sh
+# or, if you copied the scripts into your repo:
+# ./tools/tmux_bridge/start_controller.sh
+# or from anywhere:
+# /path/to/macs/tools/tmux_bridge/start_controller.sh --repo /path/to/your-repo
+# skip copying skills:
+# /path/to/macs/tools/tmux_bridge/start_controller.sh --skip-skills
+# if tmux socket auto-detect fails:
+# /path/to/macs/tools/tmux_bridge/start_controller.sh --tmux-session macs
+# /path/to/macs/tools/tmux_bridge/start_controller.sh --tmux-socket /tmp/tmux-<uid>/default
+# to bypass tmux detection (not recommended):
+# /path/to/macs/tools/tmux_bridge/start_controller.sh --no-tmux-detect
+# if Codex can't access the tmux socket from inside its sandbox:
+# /path/to/macs/tools/tmux_bridge/start_controller.sh --codex-args "--sandbox danger-full-access"
+# or set MACS_CODEX_ARGS="--sandbox danger-full-access"
+# to only install prompts/skills without launching Codex:
+# /path/to/macs/tools/tmux_bridge/start_controller.sh --no-codex
 
-# 5. From a separate terminal: start the bridge
+# This writes .codex/macs-path.txt so the controller can find tmux_bridge tools.
+# If you pass --tmux-session it writes .codex/tmux-session.txt for auto-targeting.
+
+# The controller prompt also installs a wrapper for cleaner commands:
+# ./.codex/tmux-bridge.sh snapshot|send|status|set_target|notify
+
+# 4. From a separate terminal: start the bridge
 ./bridge.py --session macs
 ```
 
@@ -46,6 +69,9 @@ codex
 | `TARGET_PANE_SUBMIT_KEYS` | `Enter,C-m` | Keys to send after input |
 | `TARGET_PANE_TYPE_DELAY_MS` | `400` | Delay after typing before submit |
 | `TARGET_PANE_GUARD_BUSY` | `1` | Refuse to send if worker is busy |
+| `TMUX_SOCKET` | (unset) | Optional tmux socket path for all scripts (`--socket` flag) |
+| `MACS_CODEX_ARGS` | (unset) | Extra args to pass to `codex` from `start_controller.sh` |
+| `MACS_CODEX_HOME` | (unset) | Override `CODEX_HOME` when `start_worker.sh` auto-launches Codex |
 
 ## Bridge Modes
 
@@ -109,3 +135,11 @@ Disable with `--no-heuristic`.
 - `inbox/` - Incoming requests (written by bridge)
 - `outbox/` - Responses (read by bridge in manual mode)
 - `archive/` - Historical requests and responses
+
+## Testing
+
+Run the tmux bridge smoke test (creates a temporary tmux server and cleans up after itself):
+
+```bash
+./tools/tmux_bridge/tests/smoke.sh
+```

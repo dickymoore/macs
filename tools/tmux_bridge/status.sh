@@ -14,6 +14,7 @@ lines="${TARGET_PANE_LINES:-200}"
 busy_lines="${TARGET_PANE_BUSY_LINES:-40}"
 label="${TARGET_PANE_LABEL:-worker}"
 exit_code=0
+socket="${TMUX_SOCKET:-}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -33,12 +34,16 @@ while [ $# -gt 0 ]; do
       label="$2"
       shift 2
       ;;
+    --socket)
+      socket="$2"
+      shift 2
+      ;;
     --exit-code)
       exit_code=1
       shift
       ;;
     --help|-h)
-      echo "Usage: $0 [--session NAME] [--pane %X] [--lines N] [--label TEXT] [--exit-code]" >&2
+      echo "Usage: $0 [--session NAME] [--pane %X] [--lines N] [--label TEXT] [--socket PATH] [--exit-code]" >&2
       exit 0
       ;;
     *)
@@ -48,7 +53,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-snapshot="$("$ROOT_DIR/snapshot.sh" --session "$session" --pane "$pane" --lines "$lines" --label "$label")"
+snapshot="$("$ROOT_DIR/snapshot.sh" --session "$session" --pane "$pane" --lines "$lines" --label "$label" ${socket:+--socket "$socket"})"
 
 recent="$(printf "%s\n" "$snapshot" | tail -n "$busy_lines")"
 if printf "%s\n" "$recent" | grep -qi "esc to interrupt"; then
