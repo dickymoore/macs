@@ -238,5 +238,9 @@ if [ "$ATTACH" -eq 1 ]; then
     tmux_cmd attach -t "$SESSION"
   fi
 else
-  echo "To attach: tmux attach -t $SESSION"
+  if [ -n "$TMUX_SOCKET_OVERRIDE" ]; then
+    echo "To attach: tmux -S \"$TMUX_SOCKET_OVERRIDE\" attach -t $SESSION"
+  else
+    echo "To attach: tmux attach -t $SESSION"
+  fi
 fi
