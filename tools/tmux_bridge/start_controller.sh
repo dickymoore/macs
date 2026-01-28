@@ -396,7 +396,7 @@ detect_tmux_socket() {
     local found_sock=""
     local found_count=0
     local macs_sock=""
-    for cand in /tmp/tmux-$(id -u)/*; do
+    for cand in "/tmp/tmux-$(id -u)"/*; do
       [ -S "$cand" ] || continue
       if tmux -S "$cand" list-sessions >/dev/null 2>&1; then
         found_sock="$cand"
