@@ -147,7 +147,7 @@ fi
 
 if [ -z "$pane" ]; then
   if [ -f "$ROOT_DIR/target_pane.txt" ]; then
-    pane="$(cat "$ROOT_DIR/target_pane.txt" | head -n1)"
+    pane="$(head -n1 < "$ROOT_DIR/target_pane.txt")"
   fi
 fi
 if [ -z "$pane" ]; then

@@ -1,24 +1,45 @@
 # MACS - Multi Agent Control System
 
-A tmux-based orchestration framework for controlling AI coding agents across multiple terminals. Enables a "controller" agent to oversee and direct a "worker" agent.
+| Pipeline | Status |
+| --- | --- |
+| Shellcheck | ![Shellcheck](https://github.com/dickymoore/macs/actions/workflows/shellcheck.yml/badge.svg) |
+| Smoke | ![Smoke](https://github.com/dickymoore/macs/actions/workflows/smoke.yml/badge.svg) |
 
-## Overview
+A tmux-based orchestration framework for controlling AI coding agents across multiple terminals. MACS separates **decision-making** (controller) from **execution** (worker) so you can keep oversight tight while shipping quickly.
 
-MACS provides infrastructure for multi-agent AI workflows where:
-- **Controller Terminal** - Runs a supervisory agent that makes decisions and provides oversight
-- **Worker Terminal** - Runs a task-execution agent that performs the actual work
+## What MACS Gives You
 
+- **Controller terminal** that supervises work, reads output, and decides next steps.
+- **Worker terminal** that executes tasks and produces artifacts.
+- **tmux bridge** scripts to snapshot output, send commands, and detect busy/idle state.
+- **Optional bridge process** that can auto-route worker questions to the controller.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  H[Human] -->|instructions| C[Controller]
+  C -->|snapshot.sh| W[Worker]
+  C -->|send.sh| W
+  C -->|status.sh| W
+  B[tmux bridge] -.-> C
+  W -->|output| C
 ```
-┌─────────────────────┐     ┌─────────────────────┐
-│  Controller (A)     │     │    Worker (B)       │
-│  - Makes decisions  │────►│  - Executes tasks   │
-│  - Reviews output   │     │  - Reports status   │
-│  - Sends commands   │◄────│  - Asks questions   │
-└─────────────────────┘     └─────────────────────┘
-        │                           │
-        │   snapshot.sh ◄───────────┘ (read output)
-        │   send.sh ────────────────► (send commands)
-        │   status.sh ◄─────────────┘ (check busy/idle)
+
+```mermaid
+sequenceDiagram
+  participant H as Human
+  participant C as Controller
+  participant B as tmux bridge
+  participant W as Worker
+  H->>C: task / guidance
+  C->>B: snapshot.sh
+  B->>W: tmux capture-pane
+  W-->>B: output
+  B-->>C: snapshot text
+  C->>B: send.sh "command"
+  B->>W: tmux send-keys
+  W-->>C: progress/output
 ```
 
 ## Quick Start
@@ -26,25 +47,9 @@ MACS provides infrastructure for multi-agent AI workflows where:
 ### Prerequisites
 - tmux
 - Codex CLI (or Claude Code)
+- Python 3.8+ (for `tools/tmux_bridge/bridge.py`)
 
-### Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/dickymoore/macs.git
-cd macs
-
-# Copy prompts to your Codex prompts directory
-mkdir -p ~/.codex/prompts
-cp .codex/prompts/*.md ~/.codex/prompts/
-
-# Make scripts executable
-chmod +x tools/tmux_bridge/*.sh
-```
-
-### Basic Usage
-
-1. **Start tmux with a worker window**:
+### 1) Start a worker window
 ```bash
 ./tools/tmux_bridge/start_worker.sh macs
 # start_worker auto-attaches by default; use --no-attach to skip
@@ -53,12 +58,13 @@ chmod +x tools/tmux_bridge/*.sh
 # use --no-codex to skip or --start-codex to force in an existing pane
 ```
 
-2. **In the worker window** (Ctrl+b n to switch), start Codex:
+### 2) Start Codex in the worker (if not auto-started)
 ```bash
-codex
+CODEX_HOME="<repo>/.codex" codex --yolo
 ```
 
-3. **In a separate controller terminal** (from your project repo root), install the controller prompt + skills and start Codex:
+### 3) Start the controller in a separate terminal
+From your project repo root:
 ```bash
 ../macs/tools/tmux_bridge/start_controller.sh
 # If you copied the scripts into your repo:
@@ -67,7 +73,6 @@ codex
 # ../macs/tools/tmux_bridge/start_controller.sh --repo /path/to/your-repo
 # Skip copying skills:
 # ../macs/tools/tmux_bridge/start_controller.sh --skip-skills
-#
 # If tmux socket auto-detect fails:
 # ../macs/tools/tmux_bridge/start_controller.sh --tmux-session macs
 # ../macs/tools/tmux_bridge/start_controller.sh --tmux-socket /tmp/tmux-<uid>/default
@@ -79,55 +84,99 @@ codex
 # To only install prompts/skills without launching Codex:
 # ../macs/tools/tmux_bridge/start_controller.sh --no-codex
 ```
-This writes `.codex/macs-path.txt` in the repo so the controller can locate `tmux_bridge` tools even when they are not vendored.
-It also attempts to record a tmux socket in `.codex/tmux-socket.txt` so controller commands can reach the correct tmux server.
-If you pass `--tmux-session`, it records `.codex/tmux-session.txt` so commands can target the right session automatically.
+This writes:
+- `.codex/macs-path.txt` so the controller can locate `tmux_bridge` tools.
+- `.codex/tmux-socket.txt` and `.codex/tmux-session.txt` for auto-targeting.
+- `.codex/tmux-bridge.sh` wrapper for cleaner command usage.
 
-4. **The controller** can now:
-   - Read worker output: `./tools/tmux_bridge/snapshot.sh`
-   - Send commands: `./tools/tmux_bridge/send.sh "your instruction"`
-   - Check status: `./tools/tmux_bridge/status.sh`
+### 4) Use the controller wrapper
+```bash
+./.codex/tmux-bridge.sh snapshot
+./.codex/tmux-bridge.sh send "your instruction"
+./.codex/tmux-bridge.sh status
+./.codex/tmux-bridge.sh set_target --pane %X
+./.codex/tmux-bridge.sh notify &
+```
 
-The controller prompt also installs a wrapper for cleaner commands:
-`./.codex/tmux-bridge.sh snapshot|send|status|set_target|notify`
+### 5) Optional: start the auto-bridge
+```bash
+./tools/tmux_bridge/bridge.py --session macs
+```
+The bridge watches for worker requests and can auto-invoke the controller.
 
 ## How It Works
 
-The controller agent uses shell scripts to interact with the worker terminal:
-
-### Helper Scripts
-
+### Helper scripts
 | Script | Purpose |
 |--------|---------|
 | `snapshot.sh` | Capture recent output from worker terminal |
 | `send.sh` | Send text/commands to worker terminal |
 | `status.sh` | Check if worker is busy (running) or idle |
 | `set_target.sh` | Pin the worker pane for subsequent commands |
-| `notify.sh` | Play sound to alert human |
+| `notify.sh` | Play a sound to alert the human |
 
-### Controller Workflow
+### Controller workflow
+1. **Snapshot** worker output.
+2. **Decide** next instruction (controller owns reasoning).
+3. **Send** a single, clear instruction to the worker.
+4. **Wait** using the built-in backoff schedule.
+5. **Repeat** until the task is complete or blocked.
 
-1. **Snapshot** - Read worker output to see current state
-2. **Decide** - Determine what instruction to give
-3. **Send** - Send command to worker via `send.sh`
-4. **Wait** - Poll with backoff until worker responds
-5. **Repeat** - Continue until task complete or blocked
+## Configuration
 
-The controller prompt (`.codex/prompts/controller.md`) contains detailed operating principles including:
-- Polling/backoff schedules
-- Busy detection rules
-- Looping behavior (stay in loop until blocked or complete)
-- When to notify the human
+### Environment variables
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TARGET_PANE_LABEL` | `worker` | Label to search for when discovering panes |
+| `TARGET_PANE_LINES` | `200` | Lines to capture in snapshots |
+| `TARGET_PANE_BUSY_LINES` | `40` | Recent lines to check for busy indicator |
+| `TARGET_PANE_SUBMIT_KEYS` | `Enter,C-m` | Keys to send after input |
+| `TARGET_PANE_TYPE_DELAY_MS` | `400` | Delay after typing before submit |
+| `TARGET_PANE_GUARD_BUSY` | `1` | Refuse to send if worker is busy |
+| `TMUX_SOCKET` | (unset) | Optional tmux socket path for all scripts (`--socket` flag) |
+| `MACS_CODEX_ARGS` | (unset) | Extra args to pass to `codex` from `start_controller.sh` |
+| `MACS_CODEX_HOME` | (unset) | Override `CODEX_HOME` used by `start_worker.sh` |
 
-## Customization
+### Files created in your repo
+- `.codex/prompts/controller.md` (controller system prompt)
+- `.codex/skills/` (skills library)
+- `.codex/macs-path.txt` (path to this MACS repo)
+- `.codex/tmux-socket.txt` / `.codex/tmux-session.txt` (auto-targeting)
+- `.codex/tmux-bridge.sh` (wrapper around tmux bridge scripts)
 
-Copy `.codex/prompts/controller.md` to your project and add project-specific rules at the bottom:
-- Repository structure
-- CI/CD requirements
-- Security policies
-- Team conventions
+## Troubleshooting
 
-See `examples/project-rules/` for templates.
+### “Operation not permitted” when snapshotting
+The Codex sandbox often cannot access the tmux socket. Re-run:
+```bash
+../macs/tools/tmux_bridge/start_controller.sh --codex-args "--sandbox danger-full-access"
+```
+
+### “Unable to find target pane”
+Pin the worker pane explicitly:
+```bash
+./.codex/tmux-bridge.sh set_target --pane %3
+```
+
+### Worker appears busy when idle
+Increase the busy detection window:
+```bash
+TARGET_PANE_BUSY_LINES=60 ./.codex/tmux-bridge.sh status
+```
+
+## Testing
+
+Run the smoke test locally:
+```bash
+./tools/tmux_bridge/tests/smoke.sh
+```
+
+## CI Pipelines
+
+- **Shellcheck**: static analysis on tmux bridge shell scripts
+- **Smoke**: spins up a dedicated tmux server and runs the bridge smoke test
+
+These are the same checks that back the status badges at the top of this README.
 
 ## Documentation
 
