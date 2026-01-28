@@ -56,6 +56,8 @@ sequenceDiagram
 # start_worker auto-launches codex in a new worker pane:
 #   CODEX_HOME="<repo>/.codex" codex --yolo
 # use --no-codex to skip or --start-codex to force in an existing pane
+# start_worker enables tmux mouse + large scrollback by default
+# use --no-mouse, --history-limit N, or --tmux-config PATH to override
 ```
 
 ### 2) Start Codex in the worker (if not auto-started)
@@ -136,6 +138,9 @@ The bridge watches for worker requests and can auto-invoke the controller.
 | `TMUX_SOCKET` | (unset) | Optional tmux socket path for all scripts (`--socket` flag) |
 | `MACS_CODEX_ARGS` | (unset) | Extra args to pass to `codex` from `start_controller.sh` |
 | `MACS_CODEX_HOME` | (unset) | Override `CODEX_HOME` used by `start_worker.sh` |
+| `MACS_TMUX_CONFIG` | (unset) | Path to `start_worker.sh` config file |
+| `MACS_TMUX_MOUSE` | `on` | Default mouse setting for `start_worker.sh` |
+| `MACS_TMUX_HISTORY_LIMIT` | `100000` | Default scrollback for `start_worker.sh` |
 
 ### Files created in your repo
 - `.codex/prompts/controller.md` (controller system prompt)
@@ -143,6 +148,24 @@ The bridge watches for worker requests and can auto-invoke the controller.
 - `.codex/macs-path.txt` (path to this MACS repo)
 - `.codex/tmux-socket.txt` / `.codex/tmux-session.txt` (auto-targeting)
 - `.codex/tmux-bridge.sh` (wrapper around tmux bridge scripts)
+
+### Worker tmux defaults
+
+`start_worker.sh` enables mouse mode and sets a large scrollback limit by default.
+
+Override in a config file:
+`./.codex/tmux-worker.env` (project) or `~/.config/macs/tmux-worker.env` (global):
+```bash
+TMUX_MOUSE=off
+TMUX_HISTORY_LIMIT=50000
+```
+
+Or override per-run:
+```bash
+./tools/tmux_bridge/start_worker.sh --no-mouse --history-limit 20000
+# target a specific tmux server/socket if needed:
+# ./tools/tmux_bridge/start_worker.sh --tmux-socket /tmp/tmux-<uid>/default
+```
 
 ## Troubleshooting
 

@@ -86,6 +86,26 @@ export TARGET_PANE_SUBMIT_DELAY_MS=200
 export TARGET_PANE_SUBMIT_REPEAT=1
 ```
 
+### Worker tmux defaults
+
+`start_worker.sh` enables mouse mode and sets a large scrollback limit by default.
+Override using a config file or flags:
+
+Config file locations (first found wins):
+- `./.codex/tmux-worker.env` (project)
+- `~/.config/macs/tmux-worker.env` (global)
+
+Example config file:
+```bash
+TMUX_MOUSE=off
+TMUX_HISTORY_LIMIT=50000
+```
+
+Per-run overrides:
+```bash
+./tools/tmux_bridge/start_worker.sh --no-mouse --history-limit 20000
+```
+
 ### Bridge Arguments
 
 Common configurations:
