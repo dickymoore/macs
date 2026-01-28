@@ -130,7 +130,7 @@ The bridge watches for worker requests and can auto-invoke the controller.
 | `TARGET_PANE_LABEL` | `worker` | Label to search for when discovering panes |
 | `TARGET_PANE_LINES` | `200` | Lines to capture in snapshots |
 | `TARGET_PANE_BUSY_LINES` | `40` | Recent lines to check for busy indicator |
-| `TARGET_PANE_SUBMIT_KEYS` | `Enter,C-m` | Keys to send after input |
+| `TARGET_PANE_SUBMIT_KEYS` | `Enter` | Keys to send after input |
 | `TARGET_PANE_TYPE_DELAY_MS` | `400` | Delay after typing before submit |
 | `TARGET_PANE_GUARD_BUSY` | `1` | Refuse to send if worker is busy |
 | `TMUX_SOCKET` | (unset) | Optional tmux socket path for all scripts (`--socket` flag) |
