@@ -65,5 +65,9 @@ test -f "$REPO_DIR/.codex/tmux-socket.txt"
 $RG_CMD -q "^$SOCKET$" "$REPO_DIR/.codex/tmux-socket.txt"
 test -f "$REPO_DIR/.codex/tmux-session.txt"
 $RG_CMD -q "^$SESSION$" "$REPO_DIR/.codex/tmux-session.txt"
+test -x "$REPO_DIR/.codex/tmux-bridge.sh"
+
+WRAP_SNAPSHOT="$(cd "$REPO_DIR" && ./.codex/tmux-bridge.sh snapshot --lines 20)"
+echo "$WRAP_SNAPSHOT" | $RG_CMD -q "tmux-bridge-send"
 
 echo "OK: tmux_bridge smoke tests passed."

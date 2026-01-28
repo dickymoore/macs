@@ -43,13 +43,16 @@ chmod +x tools/tmux_bridge/*.py
 # Create session with a worker window
 ./tools/tmux_bridge/start_worker.sh macs
 # start_worker auto-attaches by default; use --no-attach to skip
+# start_worker auto-launches codex in a new worker pane:
+#   CODEX_HOME="<repo>/.codex" codex --yolo
+# use --no-codex to skip or --start-codex to force in an existing pane
 ```
 
 ### Step 2: Start Codex in the Worker Window
 
-In the **worker** window (`Ctrl+b` then `n` to switch):
+If `start_worker.sh` already launched codex, you can skip this. Otherwise in the **worker** window (`Ctrl+b` then `n` to switch):
 ```bash
-codex
+CODEX_HOME="<repo>/.codex" codex --yolo
 ```
 
 ### Step 3: Start the Controller in a Separate Terminal
@@ -78,6 +81,9 @@ From your project repo root:
 This writes `.codex/macs-path.txt` in the repo so the controller can locate `tmux_bridge` tools even when they are not vendored.
 It also attempts to record a tmux socket in `.codex/tmux-socket.txt` so controller commands can reach the correct tmux server.
 If you pass `--tmux-session`, it records `.codex/tmux-session.txt` so commands can target the right session automatically.
+
+The controller prompt also installs a wrapper for cleaner commands:
+`./.codex/tmux-bridge.sh snapshot|send|status|set_target|notify`
 
 ### Step 4: Start the Bridge
 

@@ -135,6 +135,7 @@ MACS_PATH_FILE="$TARGET_DIR/.codex/macs-path.txt"
 MACS_BRIDGE_NOTE="$TARGET_DIR/.codex/macs-tmux-bridge.txt"
 TMUX_SOCKET_FILE="$TARGET_DIR/.codex/tmux-socket.txt"
 TMUX_SESSION_FILE="$TARGET_DIR/.codex/tmux-session.txt"
+TMUX_WRAPPER="$TARGET_DIR/.codex/tmux-bridge.sh"
 
 if [ -z "$TMUX_SESSION" ] && [ -f "$TMUX_SESSION_FILE" ]; then
   TMUX_SESSION="$(cat "$TMUX_SESSION_FILE")"
@@ -167,6 +168,80 @@ If ./tools/tmux_bridge is missing in this repo, use:
   $ROOT_DIR/tools/tmux_bridge/<script>
 Set TMUX_BRIDGE accordingly before running snapshot/send/status/set_target/notify.
 EOF
+
+cat > "$TMUX_WRAPPER" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SESSION=""
+SOCKET=""
+
+if [ -f "$ROOT_DIR/.codex/tmux-session.txt" ]; then
+  SESSION="$(cat "$ROOT_DIR/.codex/tmux-session.txt")"
+fi
+
+if [ -n "${TMUX_SOCKET:-}" ] && [ -S "${TMUX_SOCKET:-}" ]; then
+  SOCKET="$TMUX_SOCKET"
+elif [ -f "$ROOT_DIR/.codex/tmux-socket.txt" ]; then
+  socket_candidate="$(cat "$ROOT_DIR/.codex/tmux-socket.txt")"
+  if [ -n "$socket_candidate" ] && [ -S "$socket_candidate" ]; then
+    SOCKET="$socket_candidate"
+  fi
+fi
+
+TMUX_BRIDGE=""
+if [ -d "$ROOT_DIR/tools/tmux_bridge" ]; then
+  TMUX_BRIDGE="$ROOT_DIR/tools/tmux_bridge"
+elif [ -f "$ROOT_DIR/.codex/macs-path.txt" ]; then
+  TMUX_BRIDGE="$(cat "$ROOT_DIR/.codex/macs-path.txt")/tools/tmux_bridge"
+fi
+
+if [ -z "$TMUX_BRIDGE" ] || [ ! -d "$TMUX_BRIDGE" ]; then
+  echo "tmux_bridge not found. Re-run start_controller.sh or set .codex/macs-path.txt." >&2
+  exit 1
+fi
+
+cmd="${1:-}"
+if [ -z "$cmd" ]; then
+  echo "Usage: $0 {snapshot|send|status|set_target|notify} [args...]" >&2
+  exit 1
+fi
+shift || true
+
+has_session=0
+has_socket=0
+for arg in "$@"; do
+  if [ "$arg" = "--session" ]; then
+    has_session=1
+  elif [ "$arg" = "--socket" ]; then
+    has_socket=1
+  fi
+done
+
+session_args=()
+socket_args=()
+if [ "$has_session" -eq 0 ] && [ -n "$SESSION" ]; then
+  session_args=(--session "$SESSION")
+fi
+if [ "$has_socket" -eq 0 ] && [ -n "$SOCKET" ]; then
+  socket_args=(--socket "$SOCKET")
+fi
+
+case "$cmd" in
+  snapshot|send|status|set_target)
+    exec "$TMUX_BRIDGE/$cmd.sh" "${session_args[@]}" "${socket_args[@]}" "$@"
+    ;;
+  notify)
+    exec "$TMUX_BRIDGE/notify.sh" "$@"
+    ;;
+  *)
+    echo "Usage: $0 {snapshot|send|status|set_target|notify} [args...]" >&2
+    exit 1
+    ;;
+esac
+EOF
+chmod +x "$TMUX_WRAPPER"
 
 detect_tmux_socket() {
   if [ -n "$TMUX_SOCKET_OVERRIDE" ]; then

@@ -22,6 +22,9 @@ The tmux bridge enables multi-terminal AI agent orchestration by monitoring comm
 ./start_worker.sh macs
 
 # start_worker auto-attaches by default; use --no-attach to skip
+# start_worker auto-launches codex in a new worker pane:
+#   CODEX_HOME="<repo>/.codex" codex --yolo
+# use --no-codex to skip or --start-codex to force in an existing pane
 # use --reset-session to clear an existing tmux session first
 
 # 2. In worker window: start codex
@@ -49,6 +52,9 @@ codex
 # This writes .codex/macs-path.txt so the controller can find tmux_bridge tools.
 # If you pass --tmux-session it writes .codex/tmux-session.txt for auto-targeting.
 
+# The controller prompt also installs a wrapper for cleaner commands:
+# ./.codex/tmux-bridge.sh snapshot|send|status|set_target|notify
+
 # 4. From a separate terminal: start the bridge
 ./bridge.py --session macs
 ```
@@ -65,6 +71,7 @@ codex
 | `TARGET_PANE_GUARD_BUSY` | `1` | Refuse to send if worker is busy |
 | `TMUX_SOCKET` | (unset) | Optional tmux socket path for all scripts (`--socket` flag) |
 | `MACS_CODEX_ARGS` | (unset) | Extra args to pass to `codex` from `start_controller.sh` |
+| `MACS_CODEX_HOME` | (unset) | Override `CODEX_HOME` when `start_worker.sh` auto-launches Codex |
 
 ## Bridge Modes
 

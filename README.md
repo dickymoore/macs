@@ -48,6 +48,9 @@ chmod +x tools/tmux_bridge/*.sh
 ```bash
 ./tools/tmux_bridge/start_worker.sh macs
 # start_worker auto-attaches by default; use --no-attach to skip
+# start_worker auto-launches codex in a new worker pane:
+#   CODEX_HOME="<repo>/.codex" codex --yolo
+# use --no-codex to skip or --start-codex to force in an existing pane
 ```
 
 2. **In the worker window** (Ctrl+b n to switch), start Codex:
@@ -84,6 +87,9 @@ If you pass `--tmux-session`, it records `.codex/tmux-session.txt` so commands c
    - Read worker output: `./tools/tmux_bridge/snapshot.sh`
    - Send commands: `./tools/tmux_bridge/send.sh "your instruction"`
    - Check status: `./tools/tmux_bridge/status.sh`
+
+The controller prompt also installs a wrapper for cleaner commands:
+`./.codex/tmux-bridge.sh snapshot|send|status|set_target|notify`
 
 ## How It Works
 

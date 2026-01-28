@@ -13,6 +13,9 @@ Drive the BMM lifecycle (analysis -> planning -> solutioning -> implementation) 
 - If a BMAD window exists, send commands there (use `send.sh --label bmad`). Otherwise use the worker terminal.
 - Do not manually draft PRD, architecture, epics, or stories in the controller when a BMAD workflow can generate them.
 - Always load the BMAD agent persona and follow its menu items before running workflows.
+- Do not forward the user's request verbatim to the worker. First read the relevant files locally, then translate the request into concrete BMAD menu steps and commands for the worker.
+- Use BMAD commands with a single leading slash (e.g. `/bmad-help`). Never send `//bmad-help`.
+- If the BMM workflow requires it, start by loading the **SM agent**.
 
 ## Workflow
 

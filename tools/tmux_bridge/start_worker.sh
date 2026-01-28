@@ -7,9 +7,12 @@ WINDOW="worker"
 ATTACH=1
 RESET_SESSION=0
 session_set=0
+START_CODEX=1
+FORCE_CODEX=0
+CODEX_HOME_DIR="${MACS_CODEX_HOME:-$PWD/.codex}"
 
 usage() {
-  echo "Usage: $0 [--session NAME] [--no-attach|--detach] [--reset-session] [SESSION]" >&2
+  echo "Usage: $0 [--session NAME] [--no-attach|--detach] [--reset-session] [--no-codex|--start-codex] [SESSION]" >&2
 }
 
 while [ $# -gt 0 ]; do
@@ -26,6 +29,15 @@ while [ $# -gt 0 ]; do
       ;;
     --no-attach|--detach)
       ATTACH=0
+      shift
+      ;;
+    --no-codex)
+      START_CODEX=0
+      shift
+      ;;
+    --start-codex)
+      FORCE_CODEX=1
+      START_CODEX=1
       shift
       ;;
     --reset-session|--clean-session)
@@ -60,8 +72,10 @@ fi
 
 # Create session/window if missing and capture a stable pane id.
 pane_id=""
+created_new=0
 if ! tmux has-session -t "$SESSION" 2>/dev/null; then
   pane_id="$(tmux new-session -d -s "$SESSION" -n "$WINDOW" -P -F '#{pane_id}')"
+  created_new=1
 else
   # Prefer a pane already labeled via pane_title.
   pane_id="$(
@@ -86,6 +100,7 @@ else
       pane_id="$(tmux list-panes -t "$window_id" -F '#{pane_id}' | head -n1)"
     else
       pane_id="$(tmux new-window -t "$SESSION" -n "$WINDOW" -P -F '#{pane_id}')"
+      created_new=1
     fi
   fi
 fi
@@ -99,7 +114,18 @@ fi
 tmux send-keys -t "$pane_id" "printf '\\033]2;worker\\033\\\\'" Enter
 
 echo "Worker window ready in session: $SESSION"
-echo "To start codex: codex"
+
+pane_cmd="$(tmux display-message -p -t "$pane_id" '#{pane_current_command}' 2>/dev/null || true)"
+if [ "$START_CODEX" -eq 1 ] && { [ "$created_new" -eq 1 ] || [ "$FORCE_CODEX" -eq 1 ]; }; then
+  if [ "$pane_cmd" = "codex" ] && [ "$FORCE_CODEX" -eq 0 ]; then
+    echo "Codex already running in pane: $pane_id"
+  else
+    tmux send-keys -t "$pane_id" -l "CODEX_HOME=\"$CODEX_HOME_DIR\" codex --yolo" C-m
+    echo "Starting codex in pane: $pane_id"
+  fi
+else
+  echo "To start codex: CODEX_HOME=\"$CODEX_HOME_DIR\" codex --yolo"
+fi
 
 if [ "$ATTACH" -eq 1 ]; then
   if [ -n "${TMUX:-}" ]; then

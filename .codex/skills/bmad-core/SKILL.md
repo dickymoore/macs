@@ -13,6 +13,9 @@ Route BMAD execution to the worker terminal. Verify BMAD is installed, then use 
 - If a BMAD window exists, send commands there (use `send.sh --label bmad`). Otherwise use the worker terminal.
 - Do not manually author BMAD outputs in the controller when a BMAD workflow or agent can generate them.
 - Always load the BMAD agent persona, follow its menu items, and run BMAD workflows as instructed.
+- Do not forward the user's request verbatim to the worker. First read the relevant files locally, then translate the request into concrete BMAD menu steps and commands for the worker.
+- Use BMAD commands with a single leading slash (e.g. `/bmad-help`). Never send `//bmad-help`.
+- If the BMAD workflow requires it, start by loading the **SM agent**.
 
 ## Workflow
 
