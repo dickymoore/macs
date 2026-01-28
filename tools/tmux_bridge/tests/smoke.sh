@@ -16,11 +16,15 @@ TMP_DIR="$(mktemp -d)"
 REPO_DIR="$(mktemp -d)"
 SESSION="macs-test-$$"
 SOCKET="$TMP_DIR/tmux.sock"
+WORKER_SOCKET="$TMP_DIR/worker.sock"
+WORKER_SESSION="macs-worker-$$"
+WORKER_CONFIG="$TMP_DIR/tmux-worker.env"
 TARGET_FILE="$ROOT_DIR/target_pane.txt"
 TARGET_BACKUP=""
 
 cleanup() {
   tmux -S "$SOCKET" kill-server >/dev/null 2>&1 || true
+  tmux -S "$WORKER_SOCKET" kill-server >/dev/null 2>&1 || true
   if [ -n "$TARGET_BACKUP" ] && [ -f "$TARGET_BACKUP" ]; then
     mv -f "$TARGET_BACKUP" "$TARGET_FILE"
   else
@@ -69,5 +73,17 @@ test -x "$REPO_DIR/.codex/tmux-bridge.sh"
 
 WRAP_SNAPSHOT="$(cd "$REPO_DIR" && ./.codex/tmux-bridge.sh snapshot --lines 20)"
 echo "$WRAP_SNAPSHOT" | $RG_CMD -q "tmux-bridge-send"
+
+cat > "$WORKER_CONFIG" <<EOF
+TMUX_MOUSE=off
+TMUX_HISTORY_LIMIT=12345
+EOF
+
+"$ROOT_DIR/start_worker.sh" --session "$WORKER_SESSION" --tmux-socket "$WORKER_SOCKET" --tmux-config "$WORKER_CONFIG" --no-attach --no-codex >/dev/null
+
+mouse_value="$(tmux -S "$WORKER_SOCKET" show-options -t "$WORKER_SESSION" -v mouse)"
+history_value="$(tmux -S "$WORKER_SOCKET" show-options -t "$WORKER_SESSION" -v history-limit)"
+test "$mouse_value" = "off"
+test "$history_value" = "12345"
 
 echo "OK: tmux_bridge smoke tests passed."

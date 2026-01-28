@@ -46,6 +46,8 @@ chmod +x tools/tmux_bridge/*.py
 # start_worker auto-launches codex in a new worker pane:
 #   CODEX_HOME="<repo>/.codex" codex --yolo
 # use --no-codex to skip or --start-codex to force in an existing pane
+# start_worker enables tmux mouse + large scrollback by default
+# use --no-mouse, --history-limit N, or --tmux-config PATH to override
 ```
 
 ### Step 2: Start Codex in the Worker Window

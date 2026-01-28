@@ -25,6 +25,8 @@ The tmux bridge enables multi-terminal AI agent orchestration by monitoring comm
 # start_worker auto-launches codex in a new worker pane:
 #   CODEX_HOME="<repo>/.codex" codex --yolo
 # use --no-codex to skip or --start-codex to force in an existing pane
+# start_worker enables tmux mouse + large scrollback by default
+# use --no-mouse, --history-limit N, or --tmux-config PATH to override
 # use --reset-session to clear an existing tmux session first
 
 # 2. In worker window: start codex
@@ -72,6 +74,9 @@ codex
 | `TMUX_SOCKET` | (unset) | Optional tmux socket path for all scripts (`--socket` flag) |
 | `MACS_CODEX_ARGS` | (unset) | Extra args to pass to `codex` from `start_controller.sh` |
 | `MACS_CODEX_HOME` | (unset) | Override `CODEX_HOME` when `start_worker.sh` auto-launches Codex |
+| `MACS_TMUX_CONFIG` | (unset) | Path to `start_worker.sh` config file |
+| `MACS_TMUX_MOUSE` | `on` | Default mouse setting for `start_worker.sh` |
+| `MACS_TMUX_HISTORY_LIMIT` | `100000` | Default scrollback for `start_worker.sh` |
 
 ## Bridge Modes
 
@@ -142,4 +147,22 @@ Run the tmux bridge smoke test (creates a temporary tmux server and cleans up af
 
 ```bash
 ./tools/tmux_bridge/tests/smoke.sh
+```
+
+## Worker tmux defaults
+
+`start_worker.sh` enables mouse mode and sets a large scrollback limit by default.
+
+Override in a config file:
+`./.codex/tmux-worker.env` (project) or `~/.config/macs/tmux-worker.env` (global):
+```bash
+TMUX_MOUSE=off
+TMUX_HISTORY_LIMIT=50000
+```
+
+Or override per-run:
+```bash
+./tools/tmux_bridge/start_worker.sh --no-mouse --history-limit 20000
+# target a specific tmux server/socket if needed:
+# ./tools/tmux_bridge/start_worker.sh --tmux-socket /tmp/tmux-<uid>/default
 ```
