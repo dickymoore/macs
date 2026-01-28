@@ -48,15 +48,15 @@ tmux -S "$SOCKET" send-keys -t "$PANE_ID" "echo tmux-bridge-smoke" Enter
 "$ROOT_DIR/set_target.sh" --socket "$SOCKET" --pane "$PANE_ID" >/dev/null
 
 sleep 0.2
-SNAPSHOT_1="$($ROOT_DIR/snapshot.sh --socket "$SOCKET" --session "$SESSION" --lines 20)"
+SNAPSHOT_1="$("$ROOT_DIR/snapshot.sh" --socket "$SOCKET" --session "$SESSION" --lines 20)"
 echo "$SNAPSHOT_1" | $RG_CMD -q "tmux-bridge-smoke"
 
-STATUS_OUT="$($ROOT_DIR/status.sh --socket "$SOCKET" --session "$SESSION")"
+STATUS_OUT="$("$ROOT_DIR/status.sh" --socket "$SOCKET" --session "$SESSION")"
 echo "$STATUS_OUT" | $RG_CMD -q "IDLE|BUSY"
 
 "$ROOT_DIR/send.sh" --socket "$SOCKET" --session "$SESSION" "echo tmux-bridge-send" >/dev/null
 sleep 0.2
-SNAPSHOT_2="$($ROOT_DIR/snapshot.sh --socket "$SOCKET" --session "$SESSION" --lines 20)"
+SNAPSHOT_2="$("$ROOT_DIR/snapshot.sh" --socket "$SOCKET" --session "$SESSION" --lines 20)"
 echo "$SNAPSHOT_2" | $RG_CMD -q "tmux-bridge-send"
 
 "$ROOT_DIR/start_controller.sh" --repo "$REPO_DIR" --tmux-socket "$SOCKET" --tmux-session "$SESSION" --skip-skills --no-codex >/dev/null

@@ -1,6 +1,6 @@
 ---
 name: bmad-bmm
-description: "Use for BMAD BMM (BMad Method) software-dev workflows: PRD, architecture, epics/stories, sprint planning, quick-spec/quick-dev, and lifecycle tracking. Trigger on 'BMM', 'BMad Method', or when users want structured planning/implementation via BMAD.'"
+description: "Use for BMAD BMM (BMad Method) software-dev workflows: PRD, architecture, epics/stories, sprint planning, quick-spec/quick-dev, and lifecycle tracking. Trigger on 'BMM', 'BMad Method', or when users want structured planning/implementation via BMAD."
 ---
 
 # BMAD BMM (BMad Method)

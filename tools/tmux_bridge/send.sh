@@ -24,6 +24,7 @@ guard_busy="${TARGET_PANE_GUARD_BUSY:-1}"
 force_send=0
 socket="${TMUX_SOCKET:-}"
 tmux_socket_args=()
+submit_key=""
 
 if [ -n "$socket" ]; then
   tmux_socket_args=(-S "$socket")
@@ -118,6 +119,11 @@ else
   if printf "%s" "$message" | grep -q '\\n' && ! printf "%s" "$message" | grep -q $'\n'; then
     message="$(printf "%b" "$message")"
   fi
+fi
+
+submit_key="${submit_keys%%,*}"
+if [ -z "$submit_key" ]; then
+  submit_key="Enter"
 fi
 
 # Trim leading blank lines to avoid sending accidental empty submits.
