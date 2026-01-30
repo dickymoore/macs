@@ -476,6 +476,9 @@ if [ "$RUN_CODEX" -eq 1 ]; then
   if [ "${#CODEX_ARGS[@]}" -eq 0 ] && [ -n "$CODEX_ARGS_RAW" ]; then
     read -r -a CODEX_ARGS <<< "$CODEX_ARGS_RAW"
   fi
+  if [ "${#CODEX_ARGS[@]}" -eq 0 ]; then
+    CODEX_ARGS=(--sandbox danger-full-access)
+  fi
   exec codex "${CODEX_ARGS[@]}" "/prompts:controller"
 fi
 echo "Controller setup complete. Skipping codex launch (--no-codex)."
