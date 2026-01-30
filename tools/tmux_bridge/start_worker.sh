@@ -246,7 +246,8 @@ if [ "$START_CODEX" -eq 1 ] && { [ "$created_new" -eq 1 ] || [ "$FORCE_CODEX" -e
   if [ "$pane_cmd" = "codex" ] && [ "$FORCE_CODEX" -eq 0 ]; then
     echo "Codex already running in pane: $pane_id"
   else
-    tmux_cmd send-keys -t "$pane_id" -l "CODEX_HOME=\"$CODEX_HOME_DIR\" codex --yolo" C-m
+    tmux_cmd send-keys -t "$pane_id" -l "CODEX_HOME=\"$CODEX_HOME_DIR\" codex --yolo"
+    tmux_cmd send-keys -t "$pane_id" Enter
     echo "Starting codex in pane: $pane_id"
   fi
 else
