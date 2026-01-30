@@ -108,9 +108,9 @@ Per-run overrides:
 ./tools/tmux_bridge/start_worker.sh --no-mouse --history-limit 20000
 ```
 
-If the controller cannot access the default `/tmp` tmux socket (sandbox restrictions), set a repo-local socket:
+If you need to override the default repo-local socket (for example, to share a worker across checkouts or to place the socket in a custom directory), use an absolute path and set `TMUX_SOCKET` before starting the worker:
 ```bash
-TMUX_SOCKET="$PWD/.codex/tmux.sock"
+TMUX_SOCKET="/absolute/path/to/worker.tmux.sock" ./tools/tmux_bridge/start_worker.sh
 ```
 
 ### Bridge Arguments
