@@ -226,7 +226,6 @@ if [ -z "$pane_id" ]; then
   exit 1
 fi
 
-mkdir -p "$STATE_DIR"
 echo "$SESSION" > "$STATE_DIR/tmux-session.txt"
 
 socket_path="$TMUX_SOCKET_OVERRIDE"
