@@ -230,9 +230,6 @@ mkdir -p "$STATE_DIR"
 echo "$SESSION" > "$STATE_DIR/tmux-session.txt"
 
 socket_path="$TMUX_SOCKET_OVERRIDE"
-if [ -z "$socket_path" ]; then
-  socket_path="$(tmux_cmd display-message -p '#{socket_path}' 2>/dev/null || true)"
-fi
 if [ -n "$socket_path" ]; then
   echo "$socket_path" > "$STATE_DIR/tmux-socket.txt"
 fi
