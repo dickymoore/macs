@@ -56,6 +56,7 @@ sequenceDiagram
 # start_worker auto-launches codex in a new worker pane:
 #   CODEX_HOME="<repo>/.codex" codex --yolo
 # use --no-codex to skip or --start-codex to force in an existing pane
+# start_worker uses a repo-local tmux socket by default (./.codex/tmux.sock)
 # start_worker enables tmux mouse + large scrollback by default
 # use --no-mouse, --history-limit N, or --tmux-config PATH to override
 ```
@@ -152,6 +153,7 @@ The bridge watches for worker requests and can auto-invoke the controller.
 ### Worker tmux defaults
 
 `start_worker.sh` enables mouse mode and sets a large scrollback limit by default.
+It also uses a repo-local tmux socket (`./.codex/tmux.sock`) by default so the controller can connect reliably.
 
 Override in a config file:
 `./.codex/tmux-worker.env` (project) or `~/.config/macs/tmux-worker.env` (global):

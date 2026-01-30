@@ -89,6 +89,7 @@ export TARGET_PANE_SUBMIT_REPEAT=1
 ### Worker tmux defaults
 
 `start_worker.sh` enables mouse mode and sets a large scrollback limit by default.
+It also uses a repo-local tmux socket (`./.codex/tmux.sock`) by default so the controller can connect reliably.
 Override using a config file or flags:
 
 Config file locations (first found wins):
