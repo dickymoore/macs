@@ -81,9 +81,9 @@ From your project repo root:
 # ../macs/tools/tmux_bridge/start_controller.sh --tmux-socket /tmp/tmux-<uid>/default
 # To bypass tmux detection (not recommended):
 # ../macs/tools/tmux_bridge/start_controller.sh --no-tmux-detect
-# If Codex can't access the tmux socket from inside its sandbox:
-# ../macs/tools/tmux_bridge/start_controller.sh --codex-args "--sandbox danger-full-access"
-# Or set MACS_CODEX_ARGS="--sandbox danger-full-access"
+# If you don't pass a sandbox arg, start_controller.sh will prompt to add:
+# --sandbox danger-full-access (needed for tmux sockets).
+# You can also set MACS_CODEX_ARGS="--sandbox danger-full-access".
 # To only install prompts/skills without launching Codex:
 # ../macs/tools/tmux_bridge/start_controller.sh --no-codex
 ```
@@ -173,9 +173,9 @@ Or override per-run:
 ## Troubleshooting
 
 ### “Operation not permitted” when snapshotting
-The Codex sandbox may not be able to access the tmux socket. Re-run:
+The Codex sandbox may not be able to access the tmux socket. If you didn't pass a sandbox arg, start_controller.sh will prompt to add:
 ```bash
-../macs/tools/tmux_bridge/start_controller.sh --codex-args "--sandbox danger-full-access"
+--sandbox danger-full-access
 ```
 
 ### “Unable to find target pane”
