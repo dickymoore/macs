@@ -77,13 +77,19 @@ echo "$WRAP_SNAPSHOT" | $RG_CMD -q "tmux-bridge-send"
 cat > "$WORKER_CONFIG" <<EOF
 TMUX_MOUSE=off
 TMUX_HISTORY_LIMIT=12345
+TMUX_SOCKET=$WORKER_SOCKET
 EOF
 
-"$ROOT_DIR/start_worker.sh" --session "$WORKER_SESSION" --tmux-socket "$WORKER_SOCKET" --tmux-config "$WORKER_CONFIG" --no-attach --no-codex >/dev/null
+(cd "$REPO_DIR" && TMUX_SOCKET="" "$ROOT_DIR/start_worker.sh" --session "$WORKER_SESSION" --tmux-config "$WORKER_CONFIG" --no-attach --no-codex >/dev/null)
 
 mouse_value="$(tmux -S "$WORKER_SOCKET" show-options -t "$WORKER_SESSION" -v mouse)"
 history_value="$(tmux -S "$WORKER_SOCKET" show-options -t "$WORKER_SESSION" -v history-limit)"
 test "$mouse_value" = "off"
 test "$history_value" = "12345"
+
+test -f "$REPO_DIR/.codex/tmux-socket.txt"
+$RG_CMD -q "^$WORKER_SOCKET$" "$REPO_DIR/.codex/tmux-socket.txt"
+test -f "$REPO_DIR/.codex/tmux-session.txt"
+$RG_CMD -q "^$WORKER_SESSION$" "$REPO_DIR/.codex/tmux-session.txt"
 
 echo "OK: tmux_bridge smoke tests passed."

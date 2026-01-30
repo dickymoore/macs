@@ -99,11 +99,17 @@ Example config file:
 ```bash
 TMUX_MOUSE=off
 TMUX_HISTORY_LIMIT=50000
+TMUX_SOCKET=/path/to/worker.tmux.sock
 ```
 
 Per-run overrides:
 ```bash
 ./tools/tmux_bridge/start_worker.sh --no-mouse --history-limit 20000
+```
+
+If the controller cannot access the default `/tmp` tmux socket (sandbox restrictions), set a repo-local socket:
+```bash
+TMUX_SOCKET="$PWD/.codex/tmux.sock"
 ```
 
 ### Bridge Arguments

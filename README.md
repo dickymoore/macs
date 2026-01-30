@@ -158,6 +158,7 @@ Override in a config file:
 ```bash
 TMUX_MOUSE=off
 TMUX_HISTORY_LIMIT=50000
+TMUX_SOCKET=/path/to/worker.tmux.sock
 ```
 
 Or override per-run:
@@ -173,6 +174,15 @@ Or override per-run:
 The Codex sandbox often cannot access the tmux socket. Re-run:
 ```bash
 ../macs/tools/tmux_bridge/start_controller.sh --codex-args "--sandbox danger-full-access"
+```
+
+If you still see this error, run the worker with a socket inside the repo (so the controller can access it):
+```bash
+cat > .codex/tmux-worker.env <<'EOF'
+TMUX_SOCKET="$PWD/.codex/tmux.sock"
+EOF
+./tools/tmux_bridge/start_worker.sh --reset-session
+../macs/tools/tmux_bridge/start_controller.sh --force
 ```
 
 ### “Unable to find target pane”
