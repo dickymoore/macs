@@ -121,8 +121,8 @@ if [ -n "$TMUX_CONFIG_PATH" ] && [ ! -f "$TMUX_CONFIG_PATH" ]; then
 fi
 
 if [ -z "$TMUX_CONFIG_PATH" ]; then
-  if [ -f "$PWD/.codex/tmux-worker.env" ]; then
-    TMUX_CONFIG_PATH="$PWD/.codex/tmux-worker.env"
+  if [ -f "$STATE_DIR/tmux-worker.env" ]; then
+    TMUX_CONFIG_PATH="$STATE_DIR/tmux-worker.env"
   elif [ -f "$HOME/.config/macs/tmux-worker.env" ]; then
     TMUX_CONFIG_PATH="$HOME/.config/macs/tmux-worker.env"
   fi
@@ -227,11 +227,7 @@ if [ -z "$pane_id" ]; then
 fi
 
 echo "$SESSION" > "$STATE_DIR/tmux-session.txt"
-
-socket_path="$TMUX_SOCKET_OVERRIDE"
-if [ -n "$socket_path" ]; then
-  echo "$socket_path" > "$STATE_DIR/tmux-socket.txt"
-fi
+echo "$TMUX_SOCKET_OVERRIDE" > "$STATE_DIR/tmux-socket.txt"
 
 tmux_cmd set-option -t "$SESSION" mouse "$TMUX_MOUSE" >/dev/null
 tmux_cmd set-option -t "$SESSION" history-limit "$TMUX_HISTORY_LIMIT" >/dev/null

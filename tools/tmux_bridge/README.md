@@ -46,10 +46,9 @@ codex
 # /path/to/macs/tools/tmux_bridge/start_controller.sh --tmux-socket /tmp/tmux-<uid>/default
 # to bypass tmux detection (not recommended):
 # /path/to/macs/tools/tmux_bridge/start_controller.sh --no-tmux-detect
-# start_controller defaults to: --sandbox danger-full-access (needed for tmux sockets)
-# override if you want a different sandbox:
-# /path/to/macs/tools/tmux_bridge/start_controller.sh --codex-args "--sandbox read-only"
-# or set MACS_CODEX_ARGS="--sandbox read-only"
+# if Codex can't access the tmux socket from inside its sandbox:
+# /path/to/macs/tools/tmux_bridge/start_controller.sh --codex-args "--sandbox danger-full-access"
+# or set MACS_CODEX_ARGS="--sandbox danger-full-access"
 # to only install prompts/skills without launching Codex:
 # /path/to/macs/tools/tmux_bridge/start_controller.sh --no-codex
 

@@ -81,10 +81,9 @@ From your project repo root:
 # ../macs/tools/tmux_bridge/start_controller.sh --tmux-socket /tmp/tmux-<uid>/default
 # To bypass tmux detection (not recommended):
 # ../macs/tools/tmux_bridge/start_controller.sh --no-tmux-detect
-# start_controller defaults to: --sandbox danger-full-access (needed for tmux sockets)
-# Override if you want a different sandbox:
-# ../macs/tools/tmux_bridge/start_controller.sh --codex-args "--sandbox read-only"
-# Or set MACS_CODEX_ARGS="--sandbox read-only"
+# If Codex can't access the tmux socket from inside its sandbox:
+# ../macs/tools/tmux_bridge/start_controller.sh --codex-args "--sandbox danger-full-access"
+# Or set MACS_CODEX_ARGS="--sandbox danger-full-access"
 # To only install prompts/skills without launching Codex:
 # ../macs/tools/tmux_bridge/start_controller.sh --no-codex
 ```
@@ -174,18 +173,9 @@ Or override per-run:
 ## Troubleshooting
 
 ### “Operation not permitted” when snapshotting
-The Codex sandbox often cannot access the tmux socket. Re-run:
+The Codex sandbox may not be able to access the tmux socket. Re-run:
 ```bash
 ../macs/tools/tmux_bridge/start_controller.sh --codex-args "--sandbox danger-full-access"
-```
-
-If you still see this error, run the worker with a socket inside the repo (so the controller can access it):
-```bash
-cat > .codex/tmux-worker.env <<'EOF'
-TMUX_SOCKET="$PWD/.codex/tmux.sock"
-EOF
-./tools/tmux_bridge/start_worker.sh --reset-session
-../macs/tools/tmux_bridge/start_controller.sh --force
 ```
 
 ### “Unable to find target pane”
