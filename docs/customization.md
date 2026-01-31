@@ -89,6 +89,7 @@ export TARGET_PANE_SUBMIT_REPEAT=1
 ### Worker tmux defaults
 
 `start_worker.sh` enables mouse mode and sets a large scrollback limit by default.
+It also uses a repo-local tmux socket (`./.codex/tmux.sock`) by default so the controller can connect reliably.
 Override using a config file or flags:
 
 Config file locations (first found wins):
@@ -99,11 +100,17 @@ Example config file:
 ```bash
 TMUX_MOUSE=off
 TMUX_HISTORY_LIMIT=50000
+TMUX_SOCKET=/path/to/worker.tmux.sock
 ```
 
 Per-run overrides:
 ```bash
 ./tools/tmux_bridge/start_worker.sh --no-mouse --history-limit 20000
+```
+
+If you need to override the default repo-local socket (for example, to share a worker across checkouts or to place the socket in a custom directory), use an absolute path and set `TMUX_SOCKET` before starting the worker:
+```bash
+TMUX_SOCKET="/absolute/path/to/worker.tmux.sock" ./tools/tmux_bridge/start_worker.sh
 ```
 
 ### Bridge Arguments

@@ -46,6 +46,7 @@ chmod +x tools/tmux_bridge/*.py
 # start_worker auto-launches codex in a new worker pane:
 #   CODEX_HOME="<repo>/.codex" codex --yolo
 # use --no-codex to skip or --start-codex to force in an existing pane
+# start_worker uses a repo-local tmux socket by default (./.codex/tmux.sock)
 # start_worker enables tmux mouse + large scrollback by default
 # use --no-mouse, --history-limit N, or --tmux-config PATH to override
 ```
@@ -74,9 +75,9 @@ From your project repo root:
 # ../macs/tools/tmux_bridge/start_controller.sh --tmux-socket /tmp/tmux-<uid>/default
 # To bypass tmux detection (not recommended):
 # ../macs/tools/tmux_bridge/start_controller.sh --no-tmux-detect
-# If Codex can't access the tmux socket from inside its sandbox:
-# ../macs/tools/tmux_bridge/start_controller.sh --codex-args "--sandbox danger-full-access"
-# Or set MACS_CODEX_ARGS="--sandbox danger-full-access"
+# If you don't pass a sandbox arg, start_controller.sh will prompt to add:
+# --sandbox danger-full-access (needed for tmux sockets).
+# You can also set MACS_CODEX_ARGS="--sandbox danger-full-access".
 # To only install prompts/skills without launching Codex:
 # ../macs/tools/tmux_bridge/start_controller.sh --no-codex
 ```

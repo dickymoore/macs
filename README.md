@@ -56,6 +56,7 @@ sequenceDiagram
 # start_worker auto-launches codex in a new worker pane:
 #   CODEX_HOME="<repo>/.codex" codex --yolo
 # use --no-codex to skip or --start-codex to force in an existing pane
+# start_worker uses a repo-local tmux socket by default (./.codex/tmux.sock)
 # start_worker enables tmux mouse + large scrollback by default
 # use --no-mouse, --history-limit N, or --tmux-config PATH to override
 ```
@@ -80,9 +81,9 @@ From your project repo root:
 # ../macs/tools/tmux_bridge/start_controller.sh --tmux-socket /tmp/tmux-<uid>/default
 # To bypass tmux detection (not recommended):
 # ../macs/tools/tmux_bridge/start_controller.sh --no-tmux-detect
-# If Codex can't access the tmux socket from inside its sandbox:
-# ../macs/tools/tmux_bridge/start_controller.sh --codex-args "--sandbox danger-full-access"
-# Or set MACS_CODEX_ARGS="--sandbox danger-full-access"
+# If you don't pass a sandbox arg, start_controller.sh will prompt to add:
+# --sandbox danger-full-access (needed for tmux sockets).
+# You can also set MACS_CODEX_ARGS="--sandbox danger-full-access".
 # To only install prompts/skills without launching Codex:
 # ../macs/tools/tmux_bridge/start_controller.sh --no-codex
 ```
@@ -152,12 +153,14 @@ The bridge watches for worker requests and can auto-invoke the controller.
 ### Worker tmux defaults
 
 `start_worker.sh` enables mouse mode and sets a large scrollback limit by default.
+It also uses a repo-local tmux socket (`./.codex/tmux.sock`) by default so the controller can connect reliably.
 
 Override in a config file:
 `./.codex/tmux-worker.env` (project) or `~/.config/macs/tmux-worker.env` (global):
 ```bash
 TMUX_MOUSE=off
 TMUX_HISTORY_LIMIT=50000
+TMUX_SOCKET=/path/to/worker.tmux.sock
 ```
 
 Or override per-run:
@@ -170,9 +173,9 @@ Or override per-run:
 ## Troubleshooting
 
 ### “Operation not permitted” when snapshotting
-The Codex sandbox often cannot access the tmux socket. Re-run:
+The Codex sandbox may not be able to access the tmux socket. If you didn't pass a sandbox arg, start_controller.sh will prompt to add:
 ```bash
-../macs/tools/tmux_bridge/start_controller.sh --codex-args "--sandbox danger-full-access"
+--sandbox danger-full-access
 ```
 
 ### “Unable to find target pane”

@@ -10,12 +10,16 @@ session_set=0
 START_CODEX=1
 FORCE_CODEX=0
 CODEX_HOME_DIR="${MACS_CODEX_HOME:-$PWD/.codex}"
-TMUX_SOCKET_OVERRIDE="${TMUX_SOCKET:-}"
+STATE_DIR="$CODEX_HOME_DIR"
+DEFAULT_SOCKET_PATH="$STATE_DIR/tmux.sock"
+TMUX_SOCKET_ENV="${TMUX_SOCKET:-}"
+TMUX_SOCKET_OVERRIDE="$TMUX_SOCKET_ENV"
 TMUX_CONFIG_PATH="${MACS_TMUX_CONFIG:-}"
 TMUX_MOUSE="${MACS_TMUX_MOUSE:-on}"
 TMUX_HISTORY_LIMIT="${MACS_TMUX_HISTORY_LIMIT:-100000}"
 MOUSE_SET=0
 HISTORY_SET=0
+SOCKET_SET=0
 
 usage() {
   echo "Usage: $0 [--session NAME] [--no-attach|--detach] [--reset-session] [--no-codex|--start-codex] [--tmux-config PATH] [--mouse|--no-mouse] [--history-limit N] [--tmux-socket PATH] [SESSION]" >&2
@@ -53,6 +57,7 @@ while [ $# -gt 0 ]; do
         exit 1
       fi
       TMUX_SOCKET_OVERRIDE="$2"
+      SOCKET_SET=1
       shift 2
       ;;
     --mouse)
@@ -116,8 +121,8 @@ if [ -n "$TMUX_CONFIG_PATH" ] && [ ! -f "$TMUX_CONFIG_PATH" ]; then
 fi
 
 if [ -z "$TMUX_CONFIG_PATH" ]; then
-  if [ -f "$PWD/.codex/tmux-worker.env" ]; then
-    TMUX_CONFIG_PATH="$PWD/.codex/tmux-worker.env"
+  if [ -f "$STATE_DIR/tmux-worker.env" ]; then
+    TMUX_CONFIG_PATH="$STATE_DIR/tmux-worker.env"
   elif [ -f "$HOME/.config/macs/tmux-worker.env" ]; then
     TMUX_CONFIG_PATH="$HOME/.config/macs/tmux-worker.env"
   fi
@@ -126,6 +131,7 @@ fi
 if [ -n "$TMUX_CONFIG_PATH" ] && [ -f "$TMUX_CONFIG_PATH" ]; then
   TMUX_MOUSE_BEFORE="$TMUX_MOUSE"
   TMUX_HISTORY_LIMIT_BEFORE="$TMUX_HISTORY_LIMIT"
+  TMUX_SOCKET_BEFORE="$TMUX_SOCKET_OVERRIDE"
   # shellcheck disable=SC1090
   . "$TMUX_CONFIG_PATH"
   if [ "$MOUSE_SET" -eq 1 ]; then
@@ -133,6 +139,11 @@ if [ -n "$TMUX_CONFIG_PATH" ] && [ -f "$TMUX_CONFIG_PATH" ]; then
   fi
   if [ "$HISTORY_SET" -eq 1 ]; then
     TMUX_HISTORY_LIMIT="$TMUX_HISTORY_LIMIT_BEFORE"
+  fi
+  if [ "$SOCKET_SET" -eq 0 ] && [ -z "$TMUX_SOCKET_ENV" ] && [ -n "${TMUX_SOCKET:-}" ]; then
+    TMUX_SOCKET_OVERRIDE="$TMUX_SOCKET"
+  else
+    TMUX_SOCKET_OVERRIDE="$TMUX_SOCKET_BEFORE"
   fi
 fi
 
@@ -155,6 +166,12 @@ case "$TMUX_HISTORY_LIMIT" in
     exit 1
     ;;
 esac
+
+mkdir -p "$STATE_DIR"
+
+if [ -z "$TMUX_SOCKET_OVERRIDE" ]; then
+  TMUX_SOCKET_OVERRIDE="$DEFAULT_SOCKET_PATH"
+fi
 
 tmux_socket_args=()
 if [ -n "$TMUX_SOCKET_OVERRIDE" ]; then
@@ -208,6 +225,9 @@ if [ -z "$pane_id" ]; then
   echo "Unable to find or create a pane for window '$WINDOW' in session '$SESSION'." >&2
   exit 1
 fi
+
+echo "$SESSION" > "$STATE_DIR/tmux-session.txt"
+echo "$TMUX_SOCKET_OVERRIDE" > "$STATE_DIR/tmux-socket.txt"
 
 tmux_cmd set-option -t "$SESSION" mouse "$TMUX_MOUSE" >/dev/null
 tmux_cmd set-option -t "$SESSION" history-limit "$TMUX_HISTORY_LIMIT" >/dev/null

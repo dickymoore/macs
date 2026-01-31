@@ -476,6 +476,34 @@ if [ "$RUN_CODEX" -eq 1 ]; then
   if [ "${#CODEX_ARGS[@]}" -eq 0 ] && [ -n "$CODEX_ARGS_RAW" ]; then
     read -r -a CODEX_ARGS <<< "$CODEX_ARGS_RAW"
   fi
+  needs_sandbox=1
+  for arg in "${CODEX_ARGS[@]}"; do
+    case "$arg" in
+      --sandbox|--sandbox=*)
+        needs_sandbox=0
+        ;;
+    esac
+  done
+  if [ "$needs_sandbox" -eq 1 ]; then
+    if [ -t 0 ]; then
+      echo "Warning: Codex cannot access tmux sockets without --sandbox danger-full-access." >&2
+      printf "Add --sandbox danger-full-access now? [y/N]: " >&2
+      read -r reply
+      case "$reply" in
+        y|Y|yes|YES)
+          CODEX_ARGS+=(--sandbox danger-full-access)
+          ;;
+        *)
+          echo "Aborting. Re-run with --codex-args \"--sandbox danger-full-access\" or set MACS_CODEX_ARGS." >&2
+          exit 1
+          ;;
+      esac
+    else
+      echo "Error: Missing --sandbox danger-full-access and no TTY available to prompt." >&2
+      echo "Re-run with --codex-args \"--sandbox danger-full-access\" or set MACS_CODEX_ARGS." >&2
+      exit 1
+    fi
+  fi
   exec codex "${CODEX_ARGS[@]}" "/prompts:controller"
 fi
 echo "Controller setup complete. Skipping codex launch (--no-codex)."

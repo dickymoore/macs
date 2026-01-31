@@ -25,6 +25,7 @@ The tmux bridge enables multi-terminal AI agent orchestration by monitoring comm
 # start_worker auto-launches codex in a new worker pane:
 #   CODEX_HOME="<repo>/.codex" codex --yolo
 # use --no-codex to skip or --start-codex to force in an existing pane
+# start_worker uses a repo-local tmux socket by default (./.codex/tmux.sock)
 # start_worker enables tmux mouse + large scrollback by default
 # use --no-mouse, --history-limit N, or --tmux-config PATH to override
 # use --reset-session to clear an existing tmux session first
@@ -45,8 +46,8 @@ codex
 # /path/to/macs/tools/tmux_bridge/start_controller.sh --tmux-socket /tmp/tmux-<uid>/default
 # to bypass tmux detection (not recommended):
 # /path/to/macs/tools/tmux_bridge/start_controller.sh --no-tmux-detect
-# if Codex can't access the tmux socket from inside its sandbox:
-# /path/to/macs/tools/tmux_bridge/start_controller.sh --codex-args "--sandbox danger-full-access"
+# if you don't pass a sandbox arg, start_controller.sh will prompt to add:
+# --sandbox danger-full-access (needed for tmux sockets).
 # or set MACS_CODEX_ARGS="--sandbox danger-full-access"
 # to only install prompts/skills without launching Codex:
 # /path/to/macs/tools/tmux_bridge/start_controller.sh --no-codex
@@ -158,6 +159,7 @@ Override in a config file:
 ```bash
 TMUX_MOUSE=off
 TMUX_HISTORY_LIMIT=50000
+TMUX_SOCKET=/path/to/worker.tmux.sock
 ```
 
 Or override per-run:
