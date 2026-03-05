@@ -19,7 +19,9 @@ The tmux bridge enables multi-terminal AI agent orchestration by monitoring comm
 
 ```bash
 # 1. Start tmux session with a worker window
-./start_worker.sh macs
+/path/to/macs/start-worker.sh macs
+# or, if you copied scripts into your repo:
+# ./start-worker.sh macs
 
 # start_worker auto-attaches by default; use --no-attach to skip
 # start_worker auto-launches codex in a new worker pane:
@@ -34,26 +36,27 @@ The tmux bridge enables multi-terminal AI agent orchestration by monitoring comm
 codex
 
 # 3. In a controller terminal/window (from your project repo root):
-/path/to/macs/tools/tmux_bridge/start_controller.sh
+/path/to/macs/start-controller.sh
 # or, if you copied the scripts into your repo:
-# ./tools/tmux_bridge/start_controller.sh
+# ./start-controller.sh
 # or from anywhere:
-# /path/to/macs/tools/tmux_bridge/start_controller.sh --repo /path/to/your-repo
+# /path/to/macs/start-controller.sh --repo /path/to/your-repo
 # skip copying skills:
-# /path/to/macs/tools/tmux_bridge/start_controller.sh --skip-skills
+# /path/to/macs/start-controller.sh --skip-skills
 # if tmux socket auto-detect fails:
-# /path/to/macs/tools/tmux_bridge/start_controller.sh --tmux-session macs
-# /path/to/macs/tools/tmux_bridge/start_controller.sh --tmux-socket /tmp/tmux-<uid>/default
+# /path/to/macs/start-controller.sh --tmux-session macs
+# /path/to/macs/start-controller.sh --tmux-socket /tmp/tmux-<uid>/default
 # to bypass tmux detection (not recommended):
-# /path/to/macs/tools/tmux_bridge/start_controller.sh --no-tmux-detect
+# /path/to/macs/start-controller.sh --no-tmux-detect
 # if you don't pass a sandbox arg, start_controller.sh will prompt to add:
 # --sandbox danger-full-access (needed for tmux sockets).
 # or set MACS_CODEX_ARGS="--sandbox danger-full-access"
 # to only install prompts/skills without launching Codex:
-# /path/to/macs/tools/tmux_bridge/start_controller.sh --no-codex
+# /path/to/macs/start-controller.sh --no-codex
 
 # This writes .codex/macs-path.txt so the controller can find tmux_bridge tools.
 # If you pass --tmux-session it writes .codex/tmux-session.txt for auto-targeting.
+# Controller Codex is launched with CODEX_HOME="<repo>/.codex" automatically.
 
 # The controller prompt also installs a wrapper for cleaner commands:
 # ./.codex/tmux-bridge.sh snapshot|send|status|set_target|notify
@@ -164,7 +167,9 @@ TMUX_SOCKET=/path/to/worker.tmux.sock
 
 Or override per-run:
 ```bash
-./tools/tmux_bridge/start_worker.sh --no-mouse --history-limit 20000
+/path/to/macs/start-worker.sh --no-mouse --history-limit 20000
+# or, if you copied scripts into your repo:
+# ./start-worker.sh --no-mouse --history-limit 20000
 # target a specific tmux server/socket if needed:
-# ./tools/tmux_bridge/start_worker.sh --tmux-socket /tmp/tmux-<uid>/default
+# /path/to/macs/start-worker.sh --tmux-socket /tmp/tmux-<uid>/default
 ```

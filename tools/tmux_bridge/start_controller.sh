@@ -504,6 +504,7 @@ if [ "$RUN_CODEX" -eq 1 ]; then
       exit 1
     fi
   fi
-  exec codex "${CODEX_ARGS[@]}" "/prompts:controller"
+  # Ensure controller uses the target repo's local .codex state.
+  exec env CODEX_HOME="$PWD/.codex" codex "${CODEX_ARGS[@]}" "/prompts:controller"
 fi
 echo "Controller setup complete. Skipping codex launch (--no-codex)."

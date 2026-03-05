@@ -39,9 +39,12 @@ chmod +x tools/tmux_bridge/*.py
 
 ### Step 1: Start a TMux Session (Worker)
 
+From your project repo root:
 ```bash
 # Create session with a worker window
-./tools/tmux_bridge/start_worker.sh macs
+../macs/start-worker.sh macs
+# If you copied scripts into your repo:
+# ./start-worker.sh macs
 # start_worker auto-attaches by default; use --no-attach to skip
 # start_worker auto-launches codex in a new worker pane:
 #   CODEX_HOME="<repo>/.codex" codex --yolo
@@ -62,28 +65,29 @@ CODEX_HOME="<repo>/.codex" codex --yolo
 
 From your project repo root:
 ```bash
-../macs/tools/tmux_bridge/start_controller.sh
+../macs/start-controller.sh
 # If you copied the scripts into your repo:
-# ./tools/tmux_bridge/start_controller.sh
+# ./start-controller.sh
 # Or from anywhere:
-# ../macs/tools/tmux_bridge/start_controller.sh --repo /path/to/your-repo
+# /path/to/macs/start-controller.sh --repo /path/to/your-repo
 # Skip copying skills:
-# ../macs/tools/tmux_bridge/start_controller.sh --skip-skills
+# ../macs/start-controller.sh --skip-skills
 #
 # If tmux socket auto-detect fails:
-# ../macs/tools/tmux_bridge/start_controller.sh --tmux-session macs
-# ../macs/tools/tmux_bridge/start_controller.sh --tmux-socket /tmp/tmux-<uid>/default
+# ../macs/start-controller.sh --tmux-session macs
+# ../macs/start-controller.sh --tmux-socket /tmp/tmux-<uid>/default
 # To bypass tmux detection (not recommended):
-# ../macs/tools/tmux_bridge/start_controller.sh --no-tmux-detect
+# ../macs/start-controller.sh --no-tmux-detect
 # If you don't pass a sandbox arg, start_controller.sh will prompt to add:
 # --sandbox danger-full-access (needed for tmux sockets).
 # You can also set MACS_CODEX_ARGS="--sandbox danger-full-access".
 # To only install prompts/skills without launching Codex:
-# ../macs/tools/tmux_bridge/start_controller.sh --no-codex
+# ../macs/start-controller.sh --no-codex
 ```
 This writes `.codex/macs-path.txt` in the repo so the controller can locate `tmux_bridge` tools even when they are not vendored.
 It also attempts to record a tmux socket in `.codex/tmux-socket.txt` so controller commands can reach the correct tmux server.
 If you pass `--tmux-session`, it records `.codex/tmux-session.txt` so commands can target the right session automatically.
+It launches controller Codex with `CODEX_HOME="<repo>/.codex"` automatically.
 
 The controller prompt also installs a wrapper for cleaner commands:
 `./.codex/tmux-bridge.sh snapshot|send|status|set_target|notify`
