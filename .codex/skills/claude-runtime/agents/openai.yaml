@@ -1,0 +1,4 @@
+interface:
+  display_name: "Claude Runtime"
+  short_description: "Controller guidance for Claude Code CLI"
+  default_prompt: "Use Claude Code slash commands and CLI flags (/model, /permissions, /clear, --resume, --permission-mode) to manage sessions safely."

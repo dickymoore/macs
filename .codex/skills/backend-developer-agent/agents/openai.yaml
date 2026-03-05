@@ -1,0 +1,4 @@
+interface:
+  display_name: "Backend Developer Agent"
+  short_description: "Implement server endpoints"
+  default_prompt: "Implement /backend/server.js and /backend/package.json from REQUIREMENTS.md and AGENT_TASKS.md."

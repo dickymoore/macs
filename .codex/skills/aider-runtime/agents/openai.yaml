@@ -1,0 +1,4 @@
+interface:
+  display_name: "Aider Runtime"
+  short_description: "Controller guidance for Aider CLI"
+  default_prompt: "Use Aider slash commands and flags (/add, /drop, /diff, --model, --edit-format) to manage sessions safely."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Project Manager Agent"
+  short_description: "Coordinate multi-agent builds"
+  default_prompt: "Create REQUIREMENTS.md, TEST.md, and AGENT_TASKS.md and coordinate handoffs."

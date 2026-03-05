@@ -1,0 +1,4 @@
+interface:
+  display_name: "Open Interpreter Runtime"
+  short_description: "Controller guidance for Open Interpreter CLI"
+  default_prompt: "Use Open Interpreter % commands (%reset, %undo, %verbose) and interpreter CLI flags to manage sessions safely."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tester Agent"
+  short_description: "Validate against acceptance criteria"
+  default_prompt: "Verify outputs against TEST.md and produce /tests/TEST_PLAN.md (and /tests/test.sh if needed)."

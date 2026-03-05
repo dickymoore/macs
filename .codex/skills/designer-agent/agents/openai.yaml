@@ -1,0 +1,4 @@
+interface:
+  display_name: "Designer Agent"
+  short_description: "Produce implementation-ready UI specs"
+  default_prompt: "Produce /design/design_spec.md (and wireframes if needed) from requirements and tasks."

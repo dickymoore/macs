@@ -1,0 +1,4 @@
+interface:
+  display_name: "LM Studio Runtime"
+  short_description: "Controller guidance for LM Studio CLI"
+  default_prompt: "Use lms commands (ls, get, load, unload, server start/stop/status) to manage models safely."

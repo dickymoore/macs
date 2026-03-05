@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Runtime"
+  short_description: "Controller guidance for Codex CLI"
+  default_prompt: "Use Codex CLI slash commands and flags (/model, /status, /permissions, /resume, /exit, --yolo, --search) to manage sessions safely."

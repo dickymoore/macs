@@ -1,0 +1,4 @@
+interface:
+  display_name: "Frontend Developer Agent"
+  short_description: "Build UI from design spec"
+  default_prompt: "Implement /frontend/index.html, /frontend/styles.css, /frontend/main.js from design_spec.md and AGENT_TASKS.md."

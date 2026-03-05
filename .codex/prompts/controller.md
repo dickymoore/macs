@@ -114,6 +114,15 @@ EOF
 - Keep inputs single-line unless the prompt explicitly expects multi-line input.
 - Do not include leading blank lines in any input.
 - Never send Ctrl+C, Ctrl+D, Esc, or break sequences unless the human explicitly asks.
+- If you need to restart or manage session state for a fresh context, follow the model-specific runtime skill:
+  - Codex: `codex-runtime`
+  - Claude Code: `claude-runtime`
+  - Gemini CLI: `gemini-runtime`
+  - Aider: `aider-runtime`
+  - Open Interpreter: `open-interpreter-runtime`
+  - Ollama: `ollama-runtime`
+  - LM Studio: `lm-studio-runtime`
+  - llama.cpp: `llama-cpp-runtime`
 
 ### Visibility and Access (Non-negotiable)
 - If asked whether you can see the worker terminal, **run `snapshot.sh` and quote the lines you see**. Do not answer from memory.

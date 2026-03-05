@@ -1,0 +1,4 @@
+interface:
+  display_name: "Gemini Runtime"
+  short_description: "Controller guidance for Gemini CLI"
+  default_prompt: "Use Gemini CLI slash commands and flags (/model, /resume, /clear, --resume) to manage sessions safely."

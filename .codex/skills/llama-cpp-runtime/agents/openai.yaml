@@ -1,0 +1,4 @@
+interface:
+  display_name: "llama.cpp Runtime"
+  short_description: "Controller guidance for llama.cpp CLI"
+  default_prompt: "Use llama-cli and llama-server commands/flags (-m, -cnv, --chat-template, --port) to run local GGUF models safely."

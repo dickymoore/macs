@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ollama Runtime"
+  short_description: "Controller guidance for Ollama CLI"
+  default_prompt: "Use ollama commands (run, pull, list, ps, stop) to manage local models safely."
