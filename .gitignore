@@ -34,5 +34,5 @@ ENV/
 Thumbs.db
 
 # Codex
-.codex/history.jsonl
-.codex/sessions/
+.codex/
+.codex/
