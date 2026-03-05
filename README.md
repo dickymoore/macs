@@ -50,8 +50,11 @@ sequenceDiagram
 - Python 3.8+ (for `tools/tmux_bridge/bridge.py`)
 
 ### 1) Start a worker window
+From your project repo root:
 ```bash
-./tools/tmux_bridge/start_worker.sh macs
+../macs/start-worker.sh macs
+# If you copied scripts into your repo:
+# ./start-worker.sh macs
 # start_worker auto-attaches by default; use --no-attach to skip
 # start_worker auto-launches codex in a new worker pane:
 #   CODEX_HOME="<repo>/.codex" codex --yolo
@@ -69,28 +72,29 @@ CODEX_HOME="<repo>/.codex" codex --yolo
 ### 3) Start the controller in a separate terminal
 From your project repo root:
 ```bash
-../macs/tools/tmux_bridge/start_controller.sh
+../macs/start-controller.sh
 # If you copied the scripts into your repo:
-# ./tools/tmux_bridge/start_controller.sh
+# ./start-controller.sh
 # Or from anywhere:
-# ../macs/tools/tmux_bridge/start_controller.sh --repo /path/to/your-repo
+# /path/to/macs/start-controller.sh --repo /path/to/your-repo
 # Skip copying skills:
-# ../macs/tools/tmux_bridge/start_controller.sh --skip-skills
+# ../macs/start-controller.sh --skip-skills
 # If tmux socket auto-detect fails:
-# ../macs/tools/tmux_bridge/start_controller.sh --tmux-session macs
-# ../macs/tools/tmux_bridge/start_controller.sh --tmux-socket /tmp/tmux-<uid>/default
+# ../macs/start-controller.sh --tmux-session macs
+# ../macs/start-controller.sh --tmux-socket /tmp/tmux-<uid>/default
 # To bypass tmux detection (not recommended):
-# ../macs/tools/tmux_bridge/start_controller.sh --no-tmux-detect
+# ../macs/start-controller.sh --no-tmux-detect
 # If you don't pass a sandbox arg, start_controller.sh will prompt to add:
 # --sandbox danger-full-access (needed for tmux sockets).
 # You can also set MACS_CODEX_ARGS="--sandbox danger-full-access".
 # To only install prompts/skills without launching Codex:
-# ../macs/tools/tmux_bridge/start_controller.sh --no-codex
+# ../macs/start-controller.sh --no-codex
 ```
 This writes:
 - `.codex/macs-path.txt` so the controller can locate `tmux_bridge` tools.
 - `.codex/tmux-socket.txt` and `.codex/tmux-session.txt` for auto-targeting.
 - `.codex/tmux-bridge.sh` wrapper for cleaner command usage.
+- Launches controller Codex with `CODEX_HOME="<repo>/.codex"` automatically.
 
 ### 4) Use the controller wrapper
 ```bash
@@ -165,9 +169,11 @@ TMUX_SOCKET=/path/to/worker.tmux.sock
 
 Or override per-run:
 ```bash
-./tools/tmux_bridge/start_worker.sh --no-mouse --history-limit 20000
+../macs/start-worker.sh --no-mouse --history-limit 20000
+# If you copied scripts into your repo:
+# ./start-worker.sh --no-mouse --history-limit 20000
 # target a specific tmux server/socket if needed:
-# ./tools/tmux_bridge/start_worker.sh --tmux-socket /tmp/tmux-<uid>/default
+# ../macs/start-worker.sh --tmux-socket /tmp/tmux-<uid>/default
 ```
 
 ## Troubleshooting
