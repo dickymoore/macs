@@ -9,9 +9,7 @@ description: "Keep the controller looping and progressing work without interrupt
 Tell the controller to keep working without interruption until blocked.
 
 ## Usage
-Load the prompt with: `/prompts:loop`
-
-The prompt file lives at `.codex/prompts/loop.md`.
+Invoke with: `$loop`
 
 ## When to Use
 - Use when you want the controller to autonomously progress through tasks

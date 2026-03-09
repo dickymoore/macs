@@ -634,8 +634,8 @@ def main():
     )
     parser.add_argument(
         "--controller-command",
-        default="/prompts:controller",
-        help="slash command to invoke in controller codex",
+        default="$controller",
+        help="command to invoke in controller codex",
     )
     parser.add_argument(
         "--controller-timeout",

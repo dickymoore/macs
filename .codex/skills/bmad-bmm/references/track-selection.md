@@ -13,5 +13,5 @@
 - Extends planning with security, DevOps strategy, and test strategy.
 
 ## Track Selection
-- `/bmad-help` can recommend a track based on complexity indicators.
+- `$bmad-help` can recommend a track based on complexity indicators.
 - Users can override the recommendation.

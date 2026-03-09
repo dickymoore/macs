@@ -14,14 +14,14 @@ Run TEA workflows in the worker terminal. TEA integrates with BMM and provides t
 - Do not manually create TEA artifacts (test design, traceability, reviews) in the controller when the workflow can generate them.
 - Always load the TEA agent persona and follow its menu items before running workflows.
 - Do not forward the user's request verbatim to the worker. First read the relevant files locally, then translate the request into concrete BMAD menu steps and commands for the worker.
-- Use BMAD commands with a single leading slash (e.g. `/bmad-help`). Never send `//bmad-help`.
+- Use BMAD commands with a single leading dollar sign (e.g. `$bmad-help`). Never send `$$bmad-help`.
 - If the TEA workflow requires it, start by loading the **SM agent**.
 
 ## Workflow
 
 1) Confirm TEA availability
 - Check `_bmad/bmm/config.yaml` for TEA settings if needed.
-- If unsure, have the worker run `/bmad-help` and select a TEA workflow.
+- If unsure, have the worker run `$bmad-help` and select a TEA workflow.
 
 2) Pick the TEA workflow
 - Use `framework` or `ci` once per project.

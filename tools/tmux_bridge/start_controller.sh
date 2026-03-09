@@ -117,11 +117,6 @@ if [ ! -d "$TARGET_DIR" ]; then
   exit 1
 fi
 
-if [ ! -f "$SRC_PROMPT" ]; then
-  echo "Controller prompt not found: $SRC_PROMPT" >&2
-  exit 1
-fi
-
 if [ "$RUN_CODEX" -eq 1 ]; then
   if ! command -v codex >/dev/null 2>&1; then
     echo "codex not found in PATH" >&2
@@ -136,6 +131,7 @@ MACS_BRIDGE_NOTE="$TARGET_DIR/.codex/macs-tmux-bridge.txt"
 TMUX_SOCKET_FILE="$TARGET_DIR/.codex/tmux-socket.txt"
 TMUX_SESSION_FILE="$TARGET_DIR/.codex/tmux-session.txt"
 TMUX_WRAPPER="$TARGET_DIR/.codex/tmux-bridge.sh"
+TARGET_CONTROLLER_SKILL="$TARGET_DIR/.codex/skills/controller/SKILL.md"
 
 if [ -z "$TMUX_SESSION" ] && [ -f "$TMUX_SESSION_FILE" ]; then
   TMUX_SESSION="$(cat "$TMUX_SESSION_FILE")"
@@ -144,19 +140,23 @@ if [ -z "$TMUX_SOCKET_OVERRIDE" ] && [ -f "$TMUX_SOCKET_FILE" ]; then
   TMUX_SOCKET_OVERRIDE="$(cat "$TMUX_SOCKET_FILE")"
 fi
 
-if [ -f "$TARGET_PROMPT" ]; then
-  if ! cmp -s "$SRC_PROMPT" "$TARGET_PROMPT"; then
-    if [ "$FORCE" -eq 1 ]; then
-      cp "$SRC_PROMPT" "$TARGET_PROMPT"
-      echo "Updated controller prompt in $TARGET_PROMPT"
-    else
-      echo "Controller prompt already exists and differs: $TARGET_PROMPT" >&2
-      echo "Run with --force to overwrite." >&2
+if [ -f "$SRC_PROMPT" ]; then
+  if [ -f "$TARGET_PROMPT" ]; then
+    if ! cmp -s "$SRC_PROMPT" "$TARGET_PROMPT"; then
+      if [ "$FORCE" -eq 1 ]; then
+        cp "$SRC_PROMPT" "$TARGET_PROMPT"
+        echo "Updated controller prompt in $TARGET_PROMPT"
+      else
+        echo "Controller prompt already exists and differs: $TARGET_PROMPT" >&2
+        echo "Run with --force to overwrite." >&2
+      fi
     fi
+  else
+    cp "$SRC_PROMPT" "$TARGET_PROMPT"
+    echo "Installed controller prompt in $TARGET_PROMPT"
   fi
 else
-  cp "$SRC_PROMPT" "$TARGET_PROMPT"
-  echo "Installed controller prompt in $TARGET_PROMPT"
+  echo "Controller prompt not found: $SRC_PROMPT (continuing with skill-based controller startup)." >&2
 fi
 
 # Record the MACS repo path so the controller can locate tmux_bridge tools.
@@ -471,6 +471,12 @@ elif [ "$SKIP_SKILLS" -eq 0 ]; then
   echo "Skills directory not found: $SRC_SKILLS_DIR" >&2
 fi
 
+if [ "$RUN_CODEX" -eq 1 ] && [ ! -f "$TARGET_CONTROLLER_SKILL" ]; then
+  echo "Controller skill not found: $TARGET_CONTROLLER_SKILL" >&2
+  echo "Re-run without --skip-skills or provide --skills PATH containing controller/SKILL.md." >&2
+  exit 1
+fi
+
 cd "$TARGET_DIR"
 if [ "$RUN_CODEX" -eq 1 ]; then
   if [ "${#CODEX_ARGS[@]}" -eq 0 ] && [ -n "$CODEX_ARGS_RAW" ]; then
@@ -504,7 +510,7 @@ if [ "$RUN_CODEX" -eq 1 ]; then
       exit 1
     fi
   fi
-  # Ensure controller uses the target repo's local .codex state.
-  exec env CODEX_HOME="$PWD/.codex" codex "${CODEX_ARGS[@]}" "/prompts:controller"
+  # Ensure controller uses the target repo's local .codex state and loads the controller skill.
+  exec env CODEX_HOME="$PWD/.codex" codex "${CODEX_ARGS[@]}" "\$controller"
 fi
 echo "Controller setup complete. Skipping codex launch (--no-codex)."
