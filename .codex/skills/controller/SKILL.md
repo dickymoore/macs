@@ -104,6 +104,7 @@ EOF
 ### Polling and Waiting
 - After sending any command to the worker, wait for the worker's response.
 - Use this backoff schedule: 0.5s, 1s, 2s, 4s, 7s, 12s, 20s, 35s, 60s, 100s, 180s, 300s (cap at 300s).
+- Follow the backoff schedule in real time between snapshots/status checks. Do not claim to be waiting unless you are actually polling on that cadence.
 - Repeatedly snapshot until you see new output indicating progress, completion, or a question.
 - Only then decide next actions or ask the human.
 - Do **not** send "still waiting", "still running", or similar progress-only updates to the human while the worker is active. Stay silent unless you are blocked or the worker has completed.
@@ -161,6 +162,7 @@ EOF
   - (b) The worker reports completion and you have a summary to deliver.
 - If the human says "continue", "keep looping", or similar, produce **no reply at all** and remain in the loop.
 - Silence is the default while work is in progress. Do not break the loop just to acknowledge that you are waiting, polling, or monitoring the worker.
+- While looping, prefer tool-based polling over human-visible commentary. The human should see the next message only when you are blocked or have a completed result.
 - Any reply to the human **terminates** the loop. Only reply when blocked or complete.
 
 ### Before Replying to Human
