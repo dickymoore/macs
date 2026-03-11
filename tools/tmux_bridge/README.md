@@ -56,6 +56,7 @@ codex
 
 # This writes .codex/macs-path.txt so the controller can find tmux_bridge tools.
 # If you pass --tmux-session it writes .codex/tmux-session.txt for auto-targeting.
+# set_target stores the pinned pane in .codex/target-pane.txt.
 # Controller Codex is launched with CODEX_HOME="<repo>/.codex" automatically.
 
 # The controller prompt also installs a wrapper for cleaner commands:

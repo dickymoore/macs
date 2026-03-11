@@ -8,6 +8,9 @@ if ! command -v tmux >/dev/null 2>&1; then
 fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$ROOT_DIR/common.sh"
+tmux_bridge_init_state "$ROOT_DIR"
+
 session=""
 pane=""
 label="${TARGET_PANE_LABEL:-worker}"
@@ -84,5 +87,5 @@ if [ -z "$pane" ]; then
   exit 1
 fi
 
-echo "$pane" > "$ROOT_DIR/target_pane.txt"
+write_pinned_target_pane "$pane"
 echo "Target pane set to: $pane"

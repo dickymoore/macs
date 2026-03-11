@@ -78,7 +78,7 @@ EOF
 ```bash
 ./.codex/tmux-bridge.sh set_target --pane %X
 # Or: --label worker
-# After pinning, scripts use tools/tmux_bridge/target_pane.txt
+# After pinning, scripts use .codex/target-pane.txt
 ```
 
 ### Notify the human (sound alert)

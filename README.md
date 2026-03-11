@@ -80,6 +80,7 @@ From your project repo root:
 # Skip copying skills:
 # ../macs/start-controller.sh --skip-skills
 # If tmux socket auto-detect fails:
+# ../macs/start-controller macs
 # ../macs/start-controller.sh --tmux-session macs
 # ../macs/start-controller.sh --tmux-socket /tmp/tmux-<uid>/default
 # To bypass tmux detection (not recommended):
@@ -152,6 +153,7 @@ The bridge watches for worker requests and can auto-invoke the controller.
 - `.codex/skills/` (skills library)
 - `.codex/macs-path.txt` (path to this MACS repo)
 - `.codex/tmux-socket.txt` / `.codex/tmux-session.txt` (auto-targeting)
+- `.codex/target-pane.txt` (repo-local pinned worker pane)
 - `.codex/tmux-bridge.sh` (wrapper around tmux bridge scripts)
 
 ### Worker tmux defaults

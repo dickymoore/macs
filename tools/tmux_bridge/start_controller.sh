@@ -16,7 +16,8 @@ CODEX_ARGS_RAW="${MACS_CODEX_ARGS:-}"
 CODEX_ARGS=()
 
 usage() {
-  echo "Usage: $0 [--repo PATH] [--prompt PATH] [--skills PATH] [--skip-skills] [--force] [--tmux-socket PATH] [--tmux-session NAME] [--no-tmux-detect] [--codex-args \"...\"] [--no-codex]" >&2
+  echo "Usage: $0 [SESSION] [--repo PATH] [--prompt PATH] [--skills PATH] [--skip-skills] [--force] [--tmux-socket PATH] [--tmux-session NAME] [--no-tmux-detect] [--codex-args \"...\"] [--no-codex]" >&2
+  echo "  SESSION is shorthand for --tmux-session NAME" >&2
 }
 
 while [ $# -gt 0 ]; do
@@ -105,9 +106,18 @@ while [ $# -gt 0 ]; do
       exit 0
       ;;
     *)
-      echo "Unknown arg: $1" >&2
-      usage
-      exit 1
+      if [[ "$1" == -* ]]; then
+        echo "Unknown arg: $1" >&2
+        usage
+        exit 1
+      fi
+      if [ -n "$TMUX_SESSION" ]; then
+        echo "Unexpected extra positional arg: $1" >&2
+        usage
+        exit 1
+      fi
+      TMUX_SESSION="$1"
+      shift
       ;;
   esac
 done
@@ -230,7 +240,7 @@ fi
 
 case "$cmd" in
   snapshot|send|status|set_target)
-    exec "$TMUX_BRIDGE/$cmd.sh" "${session_args[@]}" "${socket_args[@]}" "$@"
+    exec env MACS_REPO_ROOT="$ROOT_DIR" "$TMUX_BRIDGE/$cmd.sh" "${session_args[@]}" "${socket_args[@]}" "$@"
     ;;
   notify)
     exec "$TMUX_BRIDGE/notify.sh" "$@"

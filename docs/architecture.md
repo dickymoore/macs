@@ -129,7 +129,7 @@ Requests are written to files; humans (or other systems) write responses.
 
 The bridge discovers panes by searching for:
 1. Explicit pane ID (`--worker-pane %3`)
-2. Pinned pane (`target_pane.txt`)
+2. Pinned pane (`.codex/target-pane.txt`, with legacy fallback from `tools/tmux_bridge/target_pane.txt`)
 3. Window/pane name containing label
 4. Process command containing "codex"
 
@@ -172,10 +172,14 @@ tools/tmux_bridge/
 ├── set_target.sh      # Pin target pane
 ├── start_*.sh         # Session setup
 ├── controller_prompt.txt  # System prompt
-├── target_pane.txt    # Pinned pane (runtime)
 ├── inbox/             # Incoming requests
 ├── outbox/            # Outgoing responses
 └── archive/           # Historical data
+
+<repo>/.codex/
+├── tmux-session.txt   # Auto-target tmux session
+├── tmux-socket.txt    # Auto-target tmux socket
+└── target-pane.txt    # Pinned pane (runtime)
 ```
 
 ## Request Deduplication

@@ -36,3 +36,4 @@ Thumbs.db
 # Codex
 .codex/
 .codex/
+.codex/config.toml
