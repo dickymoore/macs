@@ -8,6 +8,7 @@ if ! command -v tmux >/dev/null 2>&1; then
 fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./common.sh
 source "$ROOT_DIR/common.sh"
 tmux_bridge_init_state "$ROOT_DIR"
 
