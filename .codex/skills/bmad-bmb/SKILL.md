@@ -14,7 +14,7 @@ Use BMB when the user wants to create or modify BMAD agents, workflows, or full 
 - Do not manually craft BMAD agents or workflows in the controller when the BMB workflow can generate them.
 - Always load the BMB agent persona and follow its menu items before running workflows.
 - Do not forward the user's request verbatim to the worker. First read the relevant files locally, then translate the request into concrete BMAD menu steps and commands for the worker.
-- Use BMAD commands with a single leading slash (e.g. `/bmad-help`). Never send `//bmad-help`.
+- Use BMAD commands with a single leading dollar sign (e.g. `$bmad-help`). Never send `$$bmad-help`.
 - If the BMB workflow requires it, start by loading the **SM agent**.
 
 ## Workflow
@@ -24,7 +24,7 @@ Use BMB when the user wants to create or modify BMAD agents, workflows, or full 
 - If missing, install BMB via `npx bmad-method install` and select the module.
 
 2) Discover builder workflows
-- Run `/bmad-help` in the worker to list BMB commands.
+- Run `$bmad-help` in the worker to list BMB commands.
 - Inspect `_bmad/bmb/agents/` and `_bmad/bmb/workflows/` for available builders.
 
 3) Execute in worker

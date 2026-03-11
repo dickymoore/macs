@@ -14,7 +14,7 @@ Use CIS for creative/ideation workflows (brainstorming, innovation, storytelling
 - Do not manually run CIS exercises in the controller when the CIS workflow can run them.
 - Always load the CIS agent persona and follow its menu items before running workflows.
 - Do not forward the user's request verbatim to the worker. First read the relevant files locally, then translate the request into concrete BMAD menu steps and commands for the worker.
-- Use BMAD commands with a single leading slash (e.g. `/bmad-help`). Never send `//bmad-help`.
+- Use BMAD commands with a single leading dollar sign (e.g. `$bmad-help`). Never send `$$bmad-help`.
 - If the CIS workflow requires it, start by loading the **SM agent**.
 
 ## Workflow
@@ -24,7 +24,7 @@ Use CIS for creative/ideation workflows (brainstorming, innovation, storytelling
 - If missing, install CIS via `npx bmad-method install` and select the module.
 
 2) Discover CIS workflows
-- Run `/bmad-help` in the worker to list CIS commands.
+- Run `$bmad-help` in the worker to list CIS commands.
 - Inspect `_bmad/cis/agents/` and `_bmad/cis/workflows/` for available options.
 
 3) Execute in worker

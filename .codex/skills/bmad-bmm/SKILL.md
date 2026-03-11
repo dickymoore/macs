@@ -6,7 +6,7 @@ description: "Use for BMAD BMM (BMad Method) software-dev workflows: PRD, archit
 # BMAD BMM (BMad Method)
 
 ## Overview
-Drive the BMM lifecycle (analysis -> planning -> solutioning -> implementation) via the worker terminal. Use `/bmad-help` or `workflow-status` to determine the next workflow, then run the appropriate `/bmad:bmm:workflows:<id>` (or tool-equivalent) command in the worker.
+Drive the BMM lifecycle (analysis -> planning -> solutioning -> implementation) via the worker terminal. Use `$bmad-help` or `workflow-status` to determine the next workflow, then run the appropriate `$bmad:bmm:workflows:<id>` (or tool-equivalent) command in the worker.
 
 **Default mode is EXHAUSTIVE.** Unless the user explicitly asks for a lighter path, run the BMM workflows exhaustively: consult every BMAD persona, run every workflow in the map, and ensure all optional stages execute.
 
@@ -16,7 +16,7 @@ Drive the BMM lifecycle (analysis -> planning -> solutioning -> implementation) 
 - Do not manually draft PRD, architecture, epics, or stories in the controller when a BMAD workflow can generate them.
 - Always load the BMAD agent persona and follow its menu items before running workflows.
 - Do not forward the user's request verbatim to the worker. First read the relevant files locally, then translate the request into concrete BMAD menu steps and commands for the worker.
-- Use BMAD commands with a single leading slash (e.g. `/bmad-help`). Never send `//bmad-help`.
+- Use BMAD commands with a single leading dollar sign (e.g. `$bmad-help`). Never send `$$bmad-help`.
 - If the BMM workflow requires it, start by loading the **SM agent**.
 - Default to **EXHAUSTIVE** unless the user explicitly opts out.
 - **EXHAUSTIVE =** consult **every** available BMAD persona/agent, and run **every** workflow in the BMM map, including all optional stages.
@@ -31,9 +31,9 @@ Drive the BMM lifecycle (analysis -> planning -> solutioning -> implementation) 
 - Otherwise run **EXHAUSTIVE** and do not short-circuit on scope.
 
 2) Enumerate personas and workflows
-- In the worker, run `/bmad-help` and list **all** available personas/agents and **all** BMM workflows.
+- In the worker, run `$bmad-help` and list **all** available personas/agents and **all** BMM workflows.
 - Consult **every** persona before Phase 1, and again at key gates (post-PRD, post-architecture, pre-implementation).
-- Use the persona order shown by `/bmad-help` (top-to-bottom); if it changes, follow the latest list.
+- Use the persona order shown by `$bmad-help` (top-to-bottom); if it changes, follow the latest list.
 - When elicitation depth/mode is offered, select **Advanced Elicitation** every time.
 
 3) Run the full workflow map (EXHAUSTIVE)
@@ -49,7 +49,7 @@ Drive the BMM lifecycle (analysis -> planning -> solutioning -> implementation) 
 - After each workflow, run `workflow-status` (or equivalent) to confirm completion and next steps.
 
 ## Exhaustive Checklist (default)
-1) Run `/bmad-help` and capture the full persona list and workflow list.
+1) Run `$bmad-help` and capture the full persona list and workflow list.
 2) Consult every persona once in the order shown.
 3) Run **Advanced Elicitation** (if offered as a workflow or mode).
 4) Phase 1: `brainstorm`, `research`, `create-product-brief`.
@@ -69,7 +69,7 @@ Drive the BMM lifecycle (analysis -> planning -> solutioning -> implementation) 
 
 ## Worker Command Pattern
 - Always send BMAD commands to the worker via `send.sh`.
-- Example: `/bmad-help` -> choose next workflow -> `/bmad:bmm:workflows:create-prd`.
+- Example: `$bmad-help` -> choose next workflow -> `$bmad:bmm:workflows:create-prd`.
 
 ## References
 - `references/workflow-map.md`

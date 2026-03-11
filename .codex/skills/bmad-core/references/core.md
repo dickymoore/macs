@@ -10,8 +10,8 @@
 - Tool-specific command files may be created (e.g., `.claude/`).
 
 ## Help + Next Step
-- Use `/bmad-help` (or the tool's help workflow) as the primary entry point.
-- `/bmad-help` is interactive and adapts to installed modules, tracks, and project state.
+- Use `$bmad-help` (or the tool's help workflow) as the primary entry point.
+- `$bmad-help` is interactive and adapts to installed modules, tracks, and project state.
 
 ## Track Selection
 - BMAD auto-suggests a planning track (Quick Flow, BMad Method, or Enterprise) based on complexity.

@@ -11,7 +11,7 @@ The tmux bridge enables multi-terminal AI agent orchestration by monitoring comm
 | `send.sh` | Send text/commands to worker terminal |
 | `status.sh` | Check if worker is busy or idle |
 | `set_target.sh` | Pin the target pane for subsequent commands |
-| `start_controller.sh` | Install controller prompt + skills into a repo and launch Codex with `/prompts:controller` |
+| `start_controller.sh` | Install controller skills into a repo and launch Codex with `$controller` |
 | `start_worker.sh` | Create/select worker window in tmux |
 | `controller_prompt.txt` | System prompt for controller LLM |
 

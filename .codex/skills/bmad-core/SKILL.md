@@ -6,7 +6,7 @@ description: "Use when a user says 'use BMAD', 'follow BMAD', or wants the BMAD 
 # BMAD Core
 
 ## Overview
-Route BMAD execution to the worker terminal. Verify BMAD is installed, then use `/bmad-help` (or tool equivalent) to pick the right module and workflow. Do not run BMAD workflows in the controller session.
+Route BMAD execution to the worker terminal. Verify BMAD is installed, then use `$bmad-help` (or tool equivalent) to pick the right module and workflow. Do not run BMAD workflows in the controller session.
 
 ## Non-negotiable execution rules
 - Run all BMAD commands in the worker or a dedicated BMAD window, never in the controller session.
@@ -14,7 +14,7 @@ Route BMAD execution to the worker terminal. Verify BMAD is installed, then use 
 - Do not manually author BMAD outputs in the controller when a BMAD workflow or agent can generate them.
 - Always load the BMAD agent persona, follow its menu items, and run BMAD workflows as instructed.
 - Do not forward the user's request verbatim to the worker. First read the relevant files locally, then translate the request into concrete BMAD menu steps and commands for the worker.
-- Use BMAD commands with a single leading slash (e.g. `/bmad-help`). Never send `//bmad-help`.
+- Use BMAD commands with a single leading dollar sign (e.g. `$bmad-help`). Never send `$$bmad-help`.
 - If the BMAD workflow requires it, start by loading the **SM agent**.
 
 ## Workflow
@@ -29,7 +29,7 @@ Route BMAD execution to the worker terminal. Verify BMAD is installed, then use 
 - Wait for worker output before deciding the next BMAD step.
 
 3) Select module + track
-- If the user just says "use BMAD" or "follow BMAD", instruct the worker to run `/bmad-help` to see the recommended next action and available modules.
+- If the user just says "use BMAD" or "follow BMAD", instruct the worker to run `$bmad-help` to see the recommended next action and available modules.
 - Use repo cues to disambiguate:
   - `_bmad/bmm` -> BMM (software dev lifecycle)
   - `_bmad/bmgd` -> BMGD (game dev)
@@ -45,7 +45,7 @@ Route BMAD execution to the worker terminal. Verify BMAD is installed, then use 
 - Builder module -> `bmad-bmb`
 
 ## Worker Command Pattern
-- Send the exact BMAD command to the worker (e.g., `/bmad-help`).
+- Send the exact BMAD command to the worker (e.g., `$bmad-help`).
 - Do not inline long explanations; let BMAD workflows drive the process.
 
 ## References

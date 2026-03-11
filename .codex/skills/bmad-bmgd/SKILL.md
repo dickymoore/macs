@@ -6,7 +6,7 @@ description: "Use for BMAD BMGD (game development) workflows, game briefs/GDDs, 
 # BMAD BMGD (Game Dev)
 
 ## Overview
-Run BMGD workflows in the worker terminal to produce game briefs, GDDs, and game-specific architecture. Use `/bmad-help` to discover available BMGD workflows and the recommended next step.
+Run BMGD workflows in the worker terminal to produce game briefs, GDDs, and game-specific architecture. Use `$bmad-help` to discover available BMGD workflows and the recommended next step.
 
 ## Non-negotiable execution rules
 - Run all BMGD workflows in the worker or dedicated BMAD window, never locally in the controller session.
@@ -14,7 +14,7 @@ Run BMGD workflows in the worker terminal to produce game briefs, GDDs, and game
 - Do not manually author game briefs or GDDs in the controller when the workflow can generate them.
 - Always load the BMGD agent persona and follow its menu items before running workflows.
 - Do not forward the user's request verbatim to the worker. First read the relevant files locally, then translate the request into concrete BMAD menu steps and commands for the worker.
-- Use BMAD commands with a single leading slash (e.g. `/bmad-help`). Never send `//bmad-help`.
+- Use BMAD commands with a single leading dollar sign (e.g. `$bmad-help`). Never send `$$bmad-help`.
 - If the BMGD workflow requires it, start by loading the **SM agent**.
 
 ## Workflow
@@ -24,7 +24,7 @@ Run BMGD workflows in the worker terminal to produce game briefs, GDDs, and game
 - If missing, ask whether to install BMGD via `npx bmad-method install` and select the module.
 
 2) Discover available workflows
-- In the worker terminal, run `/bmad-help` and pick a BMGD workflow.
+- In the worker terminal, run `$bmad-help` and pick a BMGD workflow.
 - Optionally inspect `_bmad/bmgd/workflows/` to see available workflow IDs.
 
 3) Execute in worker
