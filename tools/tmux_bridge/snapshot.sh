@@ -8,6 +8,10 @@ if ! command -v tmux >/dev/null 2>&1; then
 fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./common.sh
+source "$ROOT_DIR/common.sh"
+tmux_bridge_init_state "$ROOT_DIR"
+
 session=""
 pane=""
 lines="${TARGET_PANE_LINES:-200}"
@@ -79,13 +83,24 @@ if [ -n "$session" ]; then
   list_scope=("-t" "$session")
 fi
 
+list_panes() {
+  tmux_cmd list-panes "${list_scope[@]}" -F '#{pane_id} #{window_name} #{pane_title} #{pane_current_command}' 2>&1
+}
+
 if [ -z "$pane" ]; then
-  if [ -f "$ROOT_DIR/target_pane.txt" ]; then
-    pane="$(head -n1 < "$ROOT_DIR/target_pane.txt")"
+  pinned_pane="$(read_pinned_target_pane)"
+  if [ -n "$pinned_pane" ]; then
+    pane_listing="$(list_panes)" || {
+      tmux_fail "$pane_listing"
+      exit 1
+    }
+    if pane_in_listing "$pinned_pane" "$pane_listing"; then
+      pane="$pinned_pane"
+    fi
   fi
 fi
 if [ -z "$pane" ]; then
-  pane_listing="$(tmux_cmd list-panes "${list_scope[@]}" -F '#{pane_id} #{window_name} #{pane_title} #{pane_current_command}' 2>&1)" || {
+  pane_listing="$(list_panes)" || {
     tmux_fail "$pane_listing"
     exit 1
   }

@@ -8,6 +8,10 @@ if ! command -v tmux >/dev/null 2>&1; then
 fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./common.sh
+source "$ROOT_DIR/common.sh"
+tmux_bridge_init_state "$ROOT_DIR"
+
 session=""
 pane=""
 label="${TARGET_PANE_LABEL:-worker}"
@@ -32,6 +36,18 @@ fi
 
 tmux_cmd() {
   tmux "${tmux_socket_args[@]}" "$@"
+}
+
+tmux_fail() {
+  local err="$1"
+  echo "tmux error: $err" >&2
+  if printf "%s" "$err" | grep -qi "operation not permitted"; then
+    echo "Cannot connect to tmux server. This usually means the session was started by a different user or via sudo." >&2
+    echo "Fix: run this script as the same user that started tmux, or set TMUX_SOCKET to the correct socket path." >&2
+    echo "If you are inside tmux, you can run: tmux display-message -p '#{socket_path}'" >&2
+  elif printf "%s" "$err" | grep -qi "no server running"; then
+    echo "No tmux server running. Start tmux or create a session first." >&2
+  fi
 }
 
 while [ $# -gt 0 ]; do
@@ -145,16 +161,39 @@ if [ -n "$session" ]; then
   list_scope=("-t" "$session")
 fi
 
+list_panes() {
+  tmux_cmd list-panes "${list_scope[@]}" -F '#{pane_id} #{window_name} #{pane_title} #{pane_current_command}' 2>&1
+}
+
 if [ -z "$pane" ]; then
-  if [ -f "$ROOT_DIR/target_pane.txt" ]; then
-    pane="$(head -n1 < "$ROOT_DIR/target_pane.txt")"
+  pinned_pane="$(read_pinned_target_pane)"
+  if [ -n "$pinned_pane" ]; then
+    pane_listing="$(list_panes)" || {
+      tmux_fail "$pane_listing"
+      exit 1
+    }
+    if pane_in_listing "$pinned_pane" "$pane_listing"; then
+      pane="$pinned_pane"
+    fi
   fi
 fi
 if [ -z "$pane" ]; then
-  pane="$(tmux_cmd list-panes "${list_scope[@]}" -F '#{pane_id} #{window_name} #{pane_title} #{pane_current_command}' | $rg_cmd "$label" | head -n1 | awk '{print $1}' || true)"
+  if [ -z "${pane_listing:-}" ]; then
+    pane_listing="$(list_panes)" || {
+      tmux_fail "$pane_listing"
+      exit 1
+    }
+  fi
+  pane="$(printf "%s\n" "$pane_listing" | $rg_cmd "$label" | head -n1 | awk '{print $1}' || true)"
 fi
 if [ -z "$pane" ] && [ "$label" != "codex" ]; then
-  pane="$(tmux_cmd list-panes "${list_scope[@]}" -F '#{pane_id} #{pane_current_command}' | $rg_cmd "$label" | head -n1 | awk '{print $1}' || true)"
+  if [ -z "${pane_listing:-}" ]; then
+    pane_listing="$(list_panes)" || {
+      tmux_fail "$pane_listing"
+      exit 1
+    }
+  fi
+  pane="$(printf "%s\n" "$pane_listing" | $rg_cmd "$label" | head -n1 | awk '{print $1}' || true)"
 fi
 
 if [ -z "$pane" ]; then

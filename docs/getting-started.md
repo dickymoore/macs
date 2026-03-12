@@ -74,6 +74,7 @@ From your project repo root:
 # ../macs/start-controller.sh --skip-skills
 #
 # If tmux socket auto-detect fails:
+# ../macs/start-controller macs
 # ../macs/start-controller.sh --tmux-session macs
 # ../macs/start-controller.sh --tmux-socket /tmp/tmux-<uid>/default
 # To bypass tmux detection (not recommended):
@@ -87,6 +88,7 @@ From your project repo root:
 This writes `.codex/macs-path.txt` in the repo so the controller can locate `tmux_bridge` tools even when they are not vendored.
 It also attempts to record a tmux socket in `.codex/tmux-socket.txt` so controller commands can reach the correct tmux server.
 If you pass `--tmux-session`, it records `.codex/tmux-session.txt` so commands can target the right session automatically.
+Pinned panes are stored in `.codex/target-pane.txt`.
 It launches controller Codex with `CODEX_HOME="<repo>/.codex"` automatically.
 
 The controller prompt also installs a wrapper for cleaner commands:
