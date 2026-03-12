@@ -16,4 +16,4 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Shellcheck tmux bridge scripts
-        run: shellcheck tools/tmux_bridge/*.sh tools/tmux_bridge/tests/*.sh
+        run: shellcheck -P tools/tmux_bridge tools/tmux_bridge/*.sh tools/tmux_bridge/tests/*.sh
