@@ -14,9 +14,12 @@ tmux_bridge_init_state "$ROOT_DIR"
 
 session=""
 pane=""
+session_explicit=0
+pane_explicit=0
 label="${TARGET_PANE_LABEL:-worker}"
 socket="${TMUX_SOCKET:-}"
 tmux_socket_args=()
+resolved_session=""
 
 if [ -n "$socket" ]; then
   tmux_socket_args=(-S "$socket")
@@ -30,10 +33,12 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --session)
       session="$2"
+      session_explicit=1
       shift 2
       ;;
     --pane)
       pane="$2"
+      pane_explicit=1
       shift 2
       ;;
     --label)
@@ -65,22 +70,38 @@ list_scope=("-a")
 if [ -n "$session" ]; then
   list_scope=("-t" "$session")
 fi
+pane_format="$(printf '#{pane_id}\t#{session_name}\t#{window_name}\t#{pane_title}\t#{pane_current_command}')"
 
-if [ -z "$pane" ]; then
-  pane_listing="$(tmux_cmd list-panes "${list_scope[@]}" -F '#{pane_id} #{window_name} #{pane_title} #{pane_current_command}' 2>&1)" || {
-    echo "tmux error: $pane_listing" >&2
-    exit 1
-  }
-  pane="$(printf "%s\n" "$pane_listing" | $rg_cmd "$label" | head -n1 | awk '{print $1}' || true)"
-fi
-if [ -z "$pane" ] && [ "$label" != "codex" ]; then
+list_panes() {
+  tmux_cmd list-panes "${list_scope[@]}" -F "$pane_format" 2>&1
+}
+
+ensure_pane_listing() {
   if [ -z "${pane_listing:-}" ]; then
-    pane_listing="$(tmux_cmd list-panes "${list_scope[@]}" -F '#{pane_id} #{window_name} #{pane_title} #{pane_current_command}' 2>&1)" || {
+    pane_listing="$(list_panes)" || {
       echo "tmux error: $pane_listing" >&2
       exit 1
     }
   fi
-  pane="$(printf "%s\n" "$pane_listing" | $rg_cmd "$label" | head -n1 | awk '{print $1}' || true)"
+}
+
+if [ "$session_explicit" -eq 0 ] && [ "$pane_explicit" -eq 0 ]; then
+  ensure_pane_listing
+  matching_session_count="$(matching_session_count_from_listing "$label" "$pane_listing")"
+  if [ "$matching_session_count" -gt 1 ]; then
+    matching_sessions="$(matching_sessions_from_listing "$label" "$pane_listing" | paste -sd ',' -)"
+    echo "Warning: multiple matching sessions found for label '$label': $matching_sessions" >&2
+    echo "Using the default target selection. Pass --session to target one explicitly." >&2
+  fi
+fi
+
+if [ -z "$pane" ]; then
+  ensure_pane_listing
+  pane="$(printf "%s\n" "$pane_listing" | $rg_cmd "$label" | head -n1 | awk -F '\t' '{print $1}' || true)"
+fi
+if [ -z "$pane" ] && [ "$label" != "codex" ]; then
+  ensure_pane_listing
+  pane="$(printf "%s\n" "$pane_listing" | $rg_cmd "$label" | head -n1 | awk -F '\t' '{print $1}' || true)"
 fi
 
 if [ -z "$pane" ]; then
@@ -88,5 +109,7 @@ if [ -z "$pane" ]; then
   exit 1
 fi
 
+ensure_pane_listing
+resolved_session="$(pane_session_from_listing "$pane" "$pane_listing" || true)"
 write_pinned_target_pane "$pane"
-echo "Target pane set to: $pane"
+echo "Target pane set to: $pane (session ${resolved_session:-unknown})"

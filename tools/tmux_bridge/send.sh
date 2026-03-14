@@ -14,6 +14,8 @@ tmux_bridge_init_state "$ROOT_DIR"
 
 session=""
 pane=""
+session_explicit=0
+pane_explicit=0
 label="${TARGET_PANE_LABEL:-worker}"
 message=""
 expand_escapes=0
@@ -26,8 +28,10 @@ type_delay_ms="${TARGET_PANE_TYPE_DELAY_MS:-400}"
 literal_mode=0
 guard_busy="${TARGET_PANE_GUARD_BUSY:-1}"
 force_send=0
+require_explicit_session_on_multi="${TARGET_PANE_REQUIRE_EXPLICIT_SESSION_ON_MULTI:-0}"
 socket="${TMUX_SOCKET:-}"
 tmux_socket_args=()
+resolved_session=""
 submit_key=""
 
 if [ -n "$socket" ]; then
@@ -54,10 +58,12 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --session)
       session="$2"
+      session_explicit=1
       shift 2
       ;;
     --pane)
       pane="$2"
+      pane_explicit=1
       shift 2
       ;;
     --label)
@@ -110,8 +116,12 @@ while [ $# -gt 0 ]; do
       force_send=1
       shift
       ;;
+    --require-explicit-session)
+      require_explicit_session_on_multi=1
+      shift
+      ;;
     --help|-h)
-      echo "Usage: $0 [--session NAME] [--pane %X] [--label TEXT] [--socket PATH] [message...]" >&2
+      echo "Usage: $0 [--session NAME] [--pane %X] [--label TEXT] [--socket PATH] [--require-explicit-session] [message...]" >&2
       exit 0
       ;;
     *)
@@ -160,46 +170,61 @@ list_scope=("-a")
 if [ -n "$session" ]; then
   list_scope=("-t" "$session")
 fi
+pane_format="$(printf '#{pane_id}\t#{session_name}\t#{window_name}\t#{pane_title}\t#{pane_current_command}')"
 
 list_panes() {
-  tmux_cmd list-panes "${list_scope[@]}" -F '#{pane_id} #{window_name} #{pane_title} #{pane_current_command}' 2>&1
+  tmux_cmd list-panes "${list_scope[@]}" -F "$pane_format" 2>&1
 }
 
-if [ -z "$pane" ]; then
-  pinned_pane="$(read_pinned_target_pane)"
-  if [ -n "$pinned_pane" ]; then
+ensure_pane_listing() {
+  if [ -z "${pane_listing:-}" ]; then
     pane_listing="$(list_panes)" || {
       tmux_fail "$pane_listing"
       exit 1
     }
+  fi
+}
+
+if [ "$session_explicit" -eq 0 ] && [ "$pane_explicit" -eq 0 ]; then
+  ensure_pane_listing
+  matching_session_count="$(matching_session_count_from_listing "$label" "$pane_listing")"
+  if [ "$matching_session_count" -gt 1 ]; then
+    matching_sessions="$(matching_sessions_from_listing "$label" "$pane_listing" | paste -sd ',' -)"
+    echo "Warning: multiple matching sessions found for label '$label': $matching_sessions" >&2
+    echo "Using the default target selection. Pass --session to target one explicitly." >&2
+    if [ "$require_explicit_session_on_multi" -eq 1 ]; then
+      echo "Refusing to send without an explicit --session while multiple matching sessions exist." >&2
+      exit 1
+    fi
+  fi
+fi
+
+if [ -z "$pane" ]; then
+  pinned_pane="$(read_pinned_target_pane)"
+  if [ -n "$pinned_pane" ]; then
+    ensure_pane_listing
     if pane_in_listing "$pinned_pane" "$pane_listing"; then
       pane="$pinned_pane"
     fi
   fi
 fi
 if [ -z "$pane" ]; then
-  if [ -z "${pane_listing:-}" ]; then
-    pane_listing="$(list_panes)" || {
-      tmux_fail "$pane_listing"
-      exit 1
-    }
-  fi
-  pane="$(printf "%s\n" "$pane_listing" | $rg_cmd "$label" | head -n1 | awk '{print $1}' || true)"
+  ensure_pane_listing
+  pane="$(printf "%s\n" "$pane_listing" | $rg_cmd "$label" | head -n1 | awk -F '\t' '{print $1}' || true)"
 fi
 if [ -z "$pane" ] && [ "$label" != "codex" ]; then
-  if [ -z "${pane_listing:-}" ]; then
-    pane_listing="$(list_panes)" || {
-      tmux_fail "$pane_listing"
-      exit 1
-    }
-  fi
-  pane="$(printf "%s\n" "$pane_listing" | $rg_cmd "$label" | head -n1 | awk '{print $1}' || true)"
+  ensure_pane_listing
+  pane="$(printf "%s\n" "$pane_listing" | $rg_cmd "$label" | head -n1 | awk -F '\t' '{print $1}' || true)"
 fi
 
 if [ -z "$pane" ]; then
   echo "Unable to find target pane. Provide --pane or set TARGET_PANE_LABEL." >&2
   exit 1
 fi
+
+ensure_pane_listing
+resolved_session="$(pane_session_from_listing "$pane" "$pane_listing" || true)"
+echo "Resolved target: session=${resolved_session:-unknown} pane=$pane" >&2
 
 if [ "$guard_busy" -eq 1 ] && [ "$force_send" -eq 0 ]; then
   if "$ROOT_DIR/status.sh" --pane "$pane" --exit-code ${socket:+--socket "$socket"} >/dev/null 2>&1; then
