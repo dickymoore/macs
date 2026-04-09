@@ -1,0 +1,100 @@
+# generated: 2026-04-09T19:24:17+0100
+# last_updated: 2026-04-09T20:06:00+01:00
+# project: macs_dev
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: /home/codexuser/macs_dev/_bmad-output/implementation-artifacts/stories
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog -> in-progress: Automatically when first story is created (via create-story)
+#   - in-progress -> done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - SM typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review
+
+generated: 2026-04-09T19:24:17+0100
+last_updated: 2026-04-09T20:06:00+01:00
+project: macs_dev
+project_key: NOKEY
+tracking_system: file-system
+story_location: /home/codexuser/macs_dev/_bmad-output/implementation-artifacts/stories
+
+development_status:
+  epic-1: in-progress
+  1-1-start-a-single-controller-orchestration-session: done
+  1-2-persist-authoritative-control-plane-entities: ready-for-dev
+  1-3-enforce-task-and-lease-state-invariants: backlog
+  1-4-restore-controller-state-safely-on-restart: backlog
+  epic-1-retrospective: optional
+
+  epic-2: backlog
+  2-1-register-and-inspect-tmux-backed-workers: backlog
+  2-2-implement-the-shared-adapter-contract-and-evidence-envelope: backlog
+  2-3-deliver-the-codex-adapter-as-the-reference-worker: backlog
+  2-4-deliver-claude-and-gemini-adapters-as-governed-workers: backlog
+  2-5-deliver-the-local-adapter-and-first-class-qualification-checks: backlog
+  epic-2-retrospective: optional
+
+  epic-3: backlog
+  3-1-configure-workflow-aware-routing-policy: backlog
+  3-2-record-explainable-assignment-decisions: backlog
+  3-3-reserve-protected-surfaces-with-coarse-default-locks: backlog
+  3-4-block-conflicts-and-duplicate-ownership-claims: backlog
+  epic-3-retrospective: optional
+
+  epic-4: backlog
+  4-1-provide-compact-list-and-inspect-commands-for-control-plane-objects: backlog
+  4-2-assign-and-manage-task-lifecycle-actions-from-one-command-path: backlog
+  4-3-inspect-degraded-evidence-and-open-the-right-worker-pane-from-context: backlog
+  4-4-support-in-place-pause-controls-and-terminal-accessibility-modes: backlog
+  epic-4-retrospective: optional
+
+  epic-5: backlog
+  5-1-classify-worker-health-and-surface-warnings-promptly: backlog
+  5-2-freeze-risky-work-through-intervention-hold-and-lease-suspension: backlog
+  5-3-reconcile-ambiguous-ownership-and-reroute-safely: backlog
+  5-4-resume-interrupted-recovery-from-persisted-recovery-runs: backlog
+  epic-5-retrospective: optional
+
+  epic-6: backlog
+  6-1-persist-a-durable-event-trail-and-history-inspectors: backlog
+  6-2-preserve-intervention-rationale-across-recovery-and-reassignment: backlog
+  6-3-enforce-explicit-decision-rights-and-guarded-actions: backlog
+  6-4-govern-external-surfaces-privacy-sensitive-routing-and-audit-content: backlog
+  epic-6-retrospective: optional
+
+  epic-7: backlog
+  7-1-separate-controller-adapter-policy-and-state-configuration: backlog
+  7-2-deliver-mixed-runtime-setup-and-validation-flow: backlog
+  7-3-preserve-and-document-single-worker-compatibility-boundaries: backlog
+  7-4-publish-contributor-facing-adapter-guidance: backlog
+  epic-7-retrospective: optional
+
+  epic-8: backlog
+  8-1-build-unit-and-contract-test-coverage-for-controller-and-adapter-invariants: backlog
+  8-2-build-integration-and-failure-drill-coverage-for-mandatory-failure-classes: backlog
+  8-3-validate-the-four-worker-reference-dogfood-scenario: backlog
+  8-4-ship-a-release-gate-command-and-report-for-phase-1-readiness: backlog
+  epic-8-retrospective: optional

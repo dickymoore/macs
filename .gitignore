@@ -40,3 +40,5 @@ Thumbs.db
 # Local BMAD/Codex generated assets
 .agents/
 _bmad/
+
+.source/

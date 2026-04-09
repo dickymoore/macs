@@ -13,6 +13,7 @@ A tmux-based orchestration framework for controlling AI coding agents across mul
 - **Worker terminal** that executes tasks and produces artifacts.
 - **tmux bridge** scripts to snapshot output, send commands, and detect busy/idle state.
 - **Optional bridge process** that can auto-route worker questions to the controller.
+- **Repo-local orchestration bootstrap** under `.codex/orchestration/` with a single-controller lock.
 
 ## Architecture
 
@@ -95,7 +96,9 @@ This writes:
 - `.codex/macs-path.txt` so the controller can locate `tmux_bridge` tools.
 - `.codex/tmux-socket.txt` and `.codex/tmux-session.txt` for auto-targeting.
 - `.codex/tmux-bridge.sh` wrapper for cleaner command usage.
+- `.codex/orchestration/` bootstrap state including `controller.lock`.
 - Launches controller Codex with `CODEX_HOME="<repo>/.codex"` automatically.
+- Acquires an exclusive repo-local controller lock before launching Codex.
 
 ### 4) Use the controller wrapper
 ```bash
@@ -106,7 +109,14 @@ This writes:
 ./.codex/tmux-bridge.sh notify &
 ```
 
-### 5) Optional: start the auto-bridge
+### 5) Optional: initialize orchestration state directly
+```bash
+./macs setup init
+```
+
+This creates or verifies `.codex/orchestration/` and the repo-local controller lock without launching the controller.
+
+### 6) Optional: start the auto-bridge
 ```bash
 ./tools/tmux_bridge/bridge.py --session macs
 ```
@@ -203,6 +213,11 @@ TARGET_PANE_BUSY_LINES=60 ./.codex/tmux-bridge.sh status
 Run the smoke test locally:
 ```bash
 ./tools/tmux_bridge/tests/smoke.sh
+```
+
+Run orchestration bootstrap tests:
+```bash
+python3 -m unittest discover -s tools/orchestration/tests
 ```
 
 ## CI Pipelines
