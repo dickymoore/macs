@@ -1,6 +1,6 @@
 # Story 1.2: Persist authoritative control-plane entities
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -219,11 +219,19 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Created the dedicated implementation-ready story file for Story 1.2 in the standard stories location.
-- Carried forward the Story 1.1 bootstrap seam so the persistence work is anchored in `tools/orchestration/` and current launcher behavior.
-- Updated sprint tracking so Story 1.2 is now marked `ready-for-dev`.
+- Implemented the authoritative persistence layer in [`tools/orchestration/store.py`](/home/codexuser/macs_dev/tools/orchestration/store.py) with SQLite schema bootstrap for the controller-owned entity tables plus supporting audit and recovery tables.
+- Extended the existing bootstrap seam so `macs setup init` now creates or verifies `.codex/orchestration/state.db` and `.codex/orchestration/events.ndjson` without introducing a second controller-authority path.
+- Added a transactional write helper that commits canonical SQLite rows before mirroring the authoritative event to `events.ndjson`.
+- Added stdlib regression coverage for schema bootstrap, JSON output status, successful SQLite-plus-NDJSON writes, rollback behavior, and preserved launcher compatibility.
+- Verified the implementation with `python3 -m unittest discover -s tools/orchestration/tests` and `./tools/tmux_bridge/tests/smoke.sh`.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/stories/1-2-persist-authoritative-control-plane-entities.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `README.md`
+- `docs/getting-started.md`
+- `tools/orchestration/cli/main.py`
+- `tools/orchestration/session.py`
+- `tools/orchestration/store.py`
+- `tools/orchestration/tests/test_setup_init.py`

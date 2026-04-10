@@ -96,7 +96,7 @@ This writes:
 - `.codex/macs-path.txt` so the controller can locate `tmux_bridge` tools.
 - `.codex/tmux-socket.txt` and `.codex/tmux-session.txt` for auto-targeting.
 - `.codex/tmux-bridge.sh` wrapper for cleaner command usage.
-- `.codex/orchestration/` bootstrap state including `controller.lock`.
+- `.codex/orchestration/` bootstrap state including `controller.lock`, `state.db`, and `events.ndjson`.
 - Launches controller Codex with `CODEX_HOME="<repo>/.codex"` automatically.
 - Acquires an exclusive repo-local controller lock before launching Codex.
 
@@ -114,7 +114,15 @@ This writes:
 ./macs setup init
 ```
 
-This creates or verifies `.codex/orchestration/` and the repo-local controller lock without launching the controller.
+This creates or verifies `.codex/orchestration/`, including the repo-local controller lock, authoritative `state.db`, and append-friendly `events.ndjson`, without launching the controller. It also runs a startup recovery pass that restores persisted control-plane state, marks any prior live ownership for reconciliation, and reports whether new assignments should stay blocked until recovery is resolved.
+
+You can then discover and inspect tmux-backed workers through the control plane:
+```bash
+./macs worker discover --json
+./macs worker list
+./macs adapter list
+./macs adapter probe --worker <worker-id> --json
+```
 
 ### 6) Optional: start the auto-bridge
 ```bash

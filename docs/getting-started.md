@@ -90,9 +90,16 @@ It also attempts to record a tmux socket in `.codex/tmux-socket.txt` so controll
 If you pass `--tmux-session`, it records `.codex/tmux-session.txt` so commands can target the right session automatically.
 Pinned panes are stored in `.codex/target-pane.txt`.
 It launches controller Codex with `CODEX_HOME="<repo>/.codex"` automatically.
+Controller bootstrap also creates `.codex/orchestration/state.db` as the authoritative control-plane store and `.codex/orchestration/events.ndjson` as the append-friendly audit export. On restart, the same bootstrap path restores persisted controller state, records a startup recovery summary, and moves any previously live ownership into reconciliation before new assignments proceed.
 
 The controller prompt also installs a wrapper for cleaner commands:
 `./.codex/tmux-bridge.sh snapshot|send|status|set_target|notify`
+
+Once tmux session metadata is present, you can discover repo-local workers with:
+```bash
+./macs worker discover --json
+./macs worker list
+```
 
 ### Step 4: Start the Bridge
 

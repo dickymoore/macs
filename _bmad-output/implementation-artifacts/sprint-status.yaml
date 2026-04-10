@@ -1,5 +1,5 @@
 # generated: 2026-04-09T19:24:17+0100
-# last_updated: 2026-04-09T20:06:00+01:00
+# last_updated: 2026-04-09T20:57:51+01:00
 # project: macs_dev
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,51 +35,51 @@
 # - Dev moves story to 'review', then runs code-review
 
 generated: 2026-04-09T19:24:17+0100
-last_updated: 2026-04-09T20:06:00+01:00
+last_updated: 2026-04-09T22:52:00+01:00
 project: macs_dev
 project_key: NOKEY
 tracking_system: file-system
 story_location: /home/codexuser/macs_dev/_bmad-output/implementation-artifacts/stories
 
 development_status:
-  epic-1: in-progress
+  epic-1: done
   1-1-start-a-single-controller-orchestration-session: done
-  1-2-persist-authoritative-control-plane-entities: ready-for-dev
-  1-3-enforce-task-and-lease-state-invariants: backlog
-  1-4-restore-controller-state-safely-on-restart: backlog
+  1-2-persist-authoritative-control-plane-entities: done
+  1-3-enforce-task-and-lease-state-invariants: done
+  1-4-restore-controller-state-safely-on-restart: done
   epic-1-retrospective: optional
 
-  epic-2: backlog
-  2-1-register-and-inspect-tmux-backed-workers: backlog
-  2-2-implement-the-shared-adapter-contract-and-evidence-envelope: backlog
-  2-3-deliver-the-codex-adapter-as-the-reference-worker: backlog
-  2-4-deliver-claude-and-gemini-adapters-as-governed-workers: backlog
-  2-5-deliver-the-local-adapter-and-first-class-qualification-checks: backlog
+  epic-2: done
+  2-1-register-and-inspect-tmux-backed-workers: done
+  2-2-implement-the-shared-adapter-contract-and-evidence-envelope: done
+  2-3-deliver-the-codex-adapter-as-the-reference-worker: done
+  2-4-deliver-claude-and-gemini-adapters-as-governed-workers: done
+  2-5-deliver-the-local-adapter-and-first-class-qualification-checks: done
   epic-2-retrospective: optional
 
-  epic-3: backlog
-  3-1-configure-workflow-aware-routing-policy: backlog
-  3-2-record-explainable-assignment-decisions: backlog
-  3-3-reserve-protected-surfaces-with-coarse-default-locks: backlog
-  3-4-block-conflicts-and-duplicate-ownership-claims: backlog
+  epic-3: done
+  3-1-configure-workflow-aware-routing-policy: done
+  3-2-record-explainable-assignment-decisions: done
+  3-3-reserve-protected-surfaces-with-coarse-default-locks: done
+  3-4-block-conflicts-and-duplicate-ownership-claims: done
   epic-3-retrospective: optional
 
-  epic-4: backlog
-  4-1-provide-compact-list-and-inspect-commands-for-control-plane-objects: backlog
+  epic-4: in-progress
+  4-1-provide-compact-list-and-inspect-commands-for-control-plane-objects: done
   4-2-assign-and-manage-task-lifecycle-actions-from-one-command-path: backlog
   4-3-inspect-degraded-evidence-and-open-the-right-worker-pane-from-context: backlog
   4-4-support-in-place-pause-controls-and-terminal-accessibility-modes: backlog
   epic-4-retrospective: optional
 
-  epic-5: backlog
-  5-1-classify-worker-health-and-surface-warnings-promptly: backlog
+  epic-5: in-progress
+  5-1-classify-worker-health-and-surface-warnings-promptly: done
   5-2-freeze-risky-work-through-intervention-hold-and-lease-suspension: backlog
   5-3-reconcile-ambiguous-ownership-and-reroute-safely: backlog
   5-4-resume-interrupted-recovery-from-persisted-recovery-runs: backlog
   epic-5-retrospective: optional
 
-  epic-6: backlog
-  6-1-persist-a-durable-event-trail-and-history-inspectors: backlog
+  epic-6: in-progress
+  6-1-persist-a-durable-event-trail-and-history-inspectors: done
   6-2-preserve-intervention-rationale-across-recovery-and-reassignment: backlog
   6-3-enforce-explicit-decision-rights-and-guarded-actions: backlog
   6-4-govern-external-surfaces-privacy-sensitive-routing-and-audit-content: backlog

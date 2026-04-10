@@ -12,6 +12,10 @@ from pathlib import Path
 
 import fcntl
 
+from tools.orchestration.recovery import StartupRecoverySummary, restore_startup_state
+from tools.orchestration.policy import PolicyBootstrapResult, bootstrap_routing_policy
+from tools.orchestration.store import StoreBootstrapResult, bootstrap_state_store
+
 
 RUNTIME_ADAPTERS = ("codex", "claude", "gemini", "local")
 
@@ -146,7 +150,19 @@ def render_lock_error(info: LockInfo) -> str:
     return "\n".join(lines)
 
 
-def setup_orchestration(repo_root: Path) -> OrchestrationPaths:
+def ensure_orchestration_store(
+    repo_root: Path,
+) -> tuple[OrchestrationPaths, StoreBootstrapResult, PolicyBootstrapResult]:
     paths = build_paths(repo_root)
     ensure_layout(paths)
-    return paths
+    store_result = bootstrap_state_store(paths.state_db, paths.events_ndjson)
+    policy_result = bootstrap_routing_policy(paths.orchestration_dir, paths.state_db)
+    return paths, store_result, policy_result
+
+
+def setup_orchestration(
+    repo_root: Path,
+) -> tuple[OrchestrationPaths, StoreBootstrapResult, StartupRecoverySummary]:
+    paths, store_result, _policy_result = ensure_orchestration_store(repo_root)
+    recovery_summary = restore_startup_state(paths.state_db, paths.events_ndjson)
+    return paths, store_result, recovery_summary
