@@ -214,7 +214,7 @@ You can then discover and inspect tmux-backed workers through the control plane:
 
 `--open-pane` keeps pane targeting on the controller-owned inspect surface. It pins the target through `tools/tmux_bridge/set_target.sh` and repo-local `.codex/target-pane.txt`, then reports `opened` when the current command can address the same tmux server or `pinned_only` with an explicit warning when it cannot.
 
-Contributor note: adapter extension guidance now lives in [docs/adapter-contributor-guide.md](/home/codexuser/macs_dev/docs/adapter-contributor-guide.md). Use that guide with `./macs adapter inspect --adapter <adapter-id> --json` and `./macs adapter validate --adapter <adapter-id> --json` before treating runtime support as first-class.
+Contributor note: adapter extension guidance now lives in [docs/adapter-contributor-guide.md](docs/adapter-contributor-guide.md). Use that guide with `./macs adapter inspect --adapter <adapter-id> --json` and `./macs adapter validate --adapter <adapter-id> --json` before treating runtime support as first-class.
 
 ### 5b) Use canonical task lifecycle commands
 
@@ -415,9 +415,14 @@ These are the same checks that back the status badges at the top of this README.
 
 ## Documentation
 
+- [Documentation Home](docs/index.md) - Start here for operator and contributor paths
 - [Getting Started](docs/getting-started.md) - Detailed setup guide
-- [Architecture](docs/architecture.md) - How MACS works
-- [Customization](docs/customization.md) - Adapting for your project
+- [Using MACS](docs/user-guide.md) - Operator reference and command patterns
+- [How-To Recipes](docs/how-tos.md) - Step-by-step workflows
+- [Architecture](docs/architecture.md) - Controller-first model and Mermaid diagrams
+- [Contributor Guide](docs/contributor-guide.md) - Repo structure, tests, and docs maintenance
+- [Adapter Contributor Guide](docs/adapter-contributor-guide.md) - Runtime adapter contract and qualification
+- [Customization](docs/customization.md) - Adapting MACS for your project
 
 ## License
 

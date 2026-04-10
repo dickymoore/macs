@@ -2,6 +2,8 @@
 
 This guide is the authoritative Phase 1 reference for adding or updating a MACS runtime adapter.
 
+For the broader repository workflow, test layout, and docs maintenance rules, read [Contributor Guide](./contributor-guide.md) first.
+
 Use it together with the live adapter surfaces:
 
 ```bash
@@ -48,7 +50,7 @@ In code, these facts are surfaced through the adapter descriptor and evidence en
 - `interrupt`
 - `acknowledge_delivery`
 
-MACS already centralizes the shared contract in [base.py](/home/codexuser/macs_dev/tools/orchestration/adapters/base.py). Extend `BaseTmuxAdapter` where possible instead of rebuilding these seams per runtime.
+MACS already centralizes the shared contract in [base.py](../tools/orchestration/adapters/base.py). Extend `BaseTmuxAdapter` where possible instead of rebuilding these seams per runtime.
 
 ### Optional Enrichments
 
@@ -79,7 +81,7 @@ Worker capabilities are declared as string labels on the worker record and surfa
   - `review`
   - `privacy_sensitive_offline`
 
-These reference labels come from the repo-local routing defaults in [policy.py](/home/codexuser/macs_dev/tools/orchestration/policy.py). They are the safest vocabulary to use in contributor work because current policy, inspect surfaces, and regression coverage already reference them.
+These reference labels come from the repo-local routing defaults in [policy.py](../tools/orchestration/policy.py). They are the safest vocabulary to use in contributor work because current policy, inspect surfaces, and regression coverage already reference them.
 
 Adapters may expose additional capability strings where justified, but new labels should not force contributors to reverse-engineer hidden controller assumptions. If a runtime only partially supports a workflow class, keep that limitation explicit in unsupported features or degraded behavior.
 
@@ -97,7 +99,7 @@ Contributor rules:
 - Surface missing optional signals as degraded or unavailable, not as false precision.
 - Do not claim first-class support when a feature only works opportunistically.
 
-In practice, this means the degraded-mode declaration should explain what MACS still trusts and what it intentionally falls back from. Existing adapters in [registry.py](/home/codexuser/macs_dev/tools/orchestration/adapters/registry.py) are the reference examples.
+In practice, this means the degraded-mode declaration should explain what MACS still trusts and what it intentionally falls back from. Existing adapters in [registry.py](../tools/orchestration/adapters/registry.py) are the reference examples.
 
 ## Qualification Expectations
 
@@ -155,13 +157,13 @@ Phase 1 does not yet ship a separate adapter scaffold generator. The supported p
 
 ## Files You Will Usually Touch
 
-- [base.py](/home/codexuser/macs_dev/tools/orchestration/adapters/base.py)
-- [registry.py](/home/codexuser/macs_dev/tools/orchestration/adapters/registry.py)
-- adapter implementation files under [adapters](/home/codexuser/macs_dev/tools/orchestration/adapters)
-- [main.py](/home/codexuser/macs_dev/tools/orchestration/cli/main.py) if contributor-facing adapter output needs to surface new declared metadata
-- [test_adapter_contracts.py](/home/codexuser/macs_dev/tools/orchestration/tests/test_adapter_contracts.py) for deterministic shared contract coverage
-- [test_controller_invariants.py](/home/codexuser/macs_dev/tools/orchestration/tests/test_controller_invariants.py) when adapter work changes controller-facing invariants or qualification expectations
-- [test_setup_init.py](/home/codexuser/macs_dev/tools/orchestration/tests/test_setup_init.py) for shared adapter contract regressions
+- [base.py](../tools/orchestration/adapters/base.py)
+- [registry.py](../tools/orchestration/adapters/registry.py)
+- adapter implementation files under [adapters](../tools/orchestration/adapters)
+- [main.py](../tools/orchestration/cli/main.py) if contributor-facing adapter output needs to surface new declared metadata
+- [test_adapter_contracts.py](../tools/orchestration/tests/test_adapter_contracts.py) for deterministic shared contract coverage
+- [test_controller_invariants.py](../tools/orchestration/tests/test_controller_invariants.py) when adapter work changes controller-facing invariants or qualification expectations
+- [test_setup_init.py](../tools/orchestration/tests/test_setup_init.py) for shared adapter contract regressions
 
 ## Anti-Patterns
 

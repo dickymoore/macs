@@ -23,7 +23,7 @@ Inspect the active configuration from the controller surface:
 
 ## Extending Runtime Adapters
 
-Contributor-facing adapter extension guidance is published separately in [adapter-contributor-guide.md](/home/codexuser/macs_dev/docs/adapter-contributor-guide.md).
+Contributor-facing adapter extension guidance is published separately in [adapter-contributor-guide.md](./adapter-contributor-guide.md).
 
 Use that guide when you need to:
 

@@ -2,6 +2,8 @@
 
 This guide walks you through setting up MACS (Multi Agent Control System) for your project.
 
+If you want the full documentation map first, start at [Documentation Home](./index.md).
+
 ## Prerequisites
 
 - **tmux** - Terminal multiplexer
@@ -369,6 +371,8 @@ Force send if needed:
 
 ## Next Steps
 
-- Read the [Architecture Guide](architecture.md) to understand how MACS works
-- See [Customization Guide](customization.md) for advanced configuration
-- Check `examples/` for project-specific rule examples
+- Read [Using MACS](./user-guide.md) for the operator command surface
+- Use [How-To Recipes](./how-tos.md) for common setup, intervention, and recovery flows
+- Read the [Architecture Guide](./architecture.md) to understand the control plane
+- See [Customization Guide](./customization.md) for advanced configuration
+- Read [Contributor Guide](./contributor-guide.md) if you are changing MACS itself
