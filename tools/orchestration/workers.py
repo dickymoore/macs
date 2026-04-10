@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from tools.orchestration.history import list_aggregate_events
+from tools.orchestration.interventions import intervention_blocking_condition, intervention_next_action
 from tools.orchestration.session import build_paths
 from tools.orchestration.store import EventRecord, connect_state_db, write_eventful_transaction
 
@@ -82,6 +84,8 @@ def discover_tmux_workers(
     observed_at: str | None = None,
 ) -> list[DiscoveredWorker]:
     socket, session = resolve_tmux_context(repo_root, tmux_socket=tmux_socket, tmux_session=tmux_session)
+    if not _socket_is_live(socket):
+        return []
     observed_at = observed_at or utc_now()
     listing = _tmux(
         socket,
@@ -132,6 +136,8 @@ def sync_discovered_workers(
     discovered_workers: list[DiscoveredWorker],
     *,
     observed_at: str | None = None,
+    scope_socket: str | None = None,
+    scope_session: str | None = None,
 ) -> list[dict[str, object]]:
     observed_at = observed_at or utc_now()
     event = EventRecord(
@@ -153,8 +159,8 @@ def sync_discovered_workers(
 
     def mutator(conn) -> None:
         discovered_ids = [worker.worker_id for worker in discovered_workers]
-        scope_socket = discovered_workers[0].tmux_socket if discovered_workers else None
-        scope_session = discovered_workers[0].tmux_session if discovered_workers else None
+        effective_scope_socket = scope_socket or (discovered_workers[0].tmux_socket if discovered_workers else None)
+        effective_scope_session = scope_session or (discovered_workers[0].tmux_session if discovered_workers else None)
 
         for worker in discovered_workers:
             row = conn.execute(
@@ -207,9 +213,9 @@ def sync_discovered_workers(
                 ),
             )
 
-        if scope_socket and scope_session:
+        if effective_scope_socket and effective_scope_session:
             placeholders = ",".join("?" for _ in discovered_ids) if discovered_ids else "?"
-            params: list[str] = [scope_socket, scope_session]
+            params: list[str] = [effective_scope_socket, effective_scope_session]
             if discovered_ids:
                 sql = (
                     f"""
@@ -269,6 +275,92 @@ def inspect_worker(state_db: Path, worker_id: str) -> dict[str, object]:
     if row is None:
         raise WorkerNotFoundError(f"Worker not found: {worker_id}")
     return _row_to_worker_dict(row)
+
+
+def inspect_worker_context(state_db: Path, worker_id: str) -> dict[str, object]:
+    worker = inspect_worker(state_db, worker_id)
+    conn = connect_state_db(state_db)
+    try:
+        task_row = conn.execute(
+            """
+            SELECT task_id, title, state, current_lease_id
+            FROM tasks
+            WHERE current_worker_id = ?
+            ORDER BY CASE WHEN state = 'active' THEN 0 ELSE 1 END, task_id
+            LIMIT 1
+            """,
+            (worker_id,),
+        ).fetchone()
+        lease_row = None
+        if task_row is not None and task_row["current_lease_id"]:
+            lease_row = conn.execute(
+                """
+                SELECT lease_id, state, issued_at, accepted_at, ended_at, intervention_reason
+                FROM leases
+                WHERE lease_id = ?
+                """,
+                (task_row["current_lease_id"],),
+            ).fetchone()
+        metadata_row = conn.execute(
+            "SELECT value FROM metadata WHERE key = 'assignments_blocked'"
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assignments_blocked = bool(metadata_row and metadata_row["value"] == "1")
+    next_action = None
+    blocking_condition = None
+    if task_row is not None and lease_row is not None:
+        next_action = intervention_next_action(
+            task_id=task_row["task_id"],
+            task_state=task_row["state"],
+            lease_state=lease_row["state"],
+            owner_state=worker["state"],
+            assignments_blocked=assignments_blocked,
+        )
+        blocking_condition = intervention_blocking_condition(
+            task_state=task_row["state"],
+            lease_state=lease_row["state"],
+            owner_state=worker["state"],
+            assignments_blocked=assignments_blocked,
+        )
+
+    worker["controller_truth"] = {
+        "canonical_state": worker["state"],
+        "routability": _build_routability(worker["state"]),
+        "current_task": (
+            {
+                "task_id": task_row["task_id"],
+                "summary": task_row["title"],
+                "state": task_row["state"],
+                "next_action": next_action,
+                "blocking_condition": blocking_condition,
+            }
+            if task_row is not None
+            else None
+        ),
+        "current_lease": (
+            {
+                "lease_id": lease_row["lease_id"],
+                "state": lease_row["state"],
+                "issued_at": lease_row["issued_at"],
+                "accepted_at": lease_row["accepted_at"],
+                "ended_at": lease_row["ended_at"],
+                "intervention_reason": lease_row["intervention_reason"],
+            }
+            if lease_row is not None
+            else None
+        ),
+        "pane_target": {
+            "tmux_socket": worker["tmux_socket"],
+            "tmux_session": worker["tmux_session"],
+            "tmux_pane": worker["tmux_pane"],
+        },
+        "recent_event_refs": list_aggregate_events(state_db, worker_id),
+    }
+    worker["blocking_condition"] = blocking_condition
+    worker["next_action"] = next_action
+    return worker
 
 
 def register_worker(state_db: Path, events_ndjson: Path, worker_id: str, adapter_id: str) -> dict[str, object]:
@@ -470,3 +562,15 @@ def _freshness_seconds(value: str | None) -> int:
     except ValueError:
         return 0
     return max(0, int((datetime.now(timezone.utc) - observed_at).total_seconds()))
+
+
+def _build_routability(state: str) -> dict[str, object]:
+    if state in {"degraded", "unavailable", "quarantined"}:
+        return {
+            "assignable": False,
+            "reason": f"worker_state_{state}",
+        }
+    return {
+        "assignable": True,
+        "reason": "assignable",
+    }

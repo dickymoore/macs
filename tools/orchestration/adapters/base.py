@@ -8,6 +8,58 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 
+REQUIRED_FACTS = [
+    "stable_worker_identity",
+    "runtime_type",
+    "tmux_location",
+    "capability_declaration",
+    "freshness_timestamp",
+    "interruptibility_support",
+    "degraded_mode_declaration",
+]
+
+REQUIRED_OPERATIONS = [
+    "discover_workers",
+    "probe",
+    "dispatch",
+    "capture",
+    "interrupt",
+    "acknowledge_delivery",
+]
+
+PHASE1_REFERENCE_WORKFLOW_CLASSES = [
+    "documentation_context",
+    "planning_docs",
+    "solutioning",
+    "implementation",
+    "review",
+    "privacy_sensitive_offline",
+]
+
+QUALIFICATION_EXPECTATIONS = [
+    "shared_contract_suite",
+    "unsupported_feature_declarations",
+    "degraded_mode_behavior",
+    "controller_mediated_intervention",
+    "routing_evidence_support",
+    "supported_feature_regressions",
+]
+
+SHARED_VALIDATION_COMMANDS = [
+    "python3 -m unittest tools.orchestration.tests.test_adapter_contracts",
+    "python3 -m unittest tools.orchestration.tests.test_controller_invariants",
+    "python3 -m unittest tools.orchestration.tests.test_setup_init",
+    "python3 -m unittest discover -s tools/orchestration/tests",
+    "macs adapter inspect --adapter <adapter-id> --json",
+    "macs adapter validate --adapter <adapter-id> --json",
+]
+
+RELEASE_GATE_CRITERIA = [
+    "RG1:evidence_based_first_class_qualification",
+    "RG8:contributor_guidance_alignment",
+]
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -47,28 +99,52 @@ class BaseTmuxAdapter:
         degraded_mode: str,
         unsupported_features: list[str],
         qualification_status: str,
+        optional_enrichments: list[str] | None = None,
+        governed_surfaces: list[str] | None = None,
     ):
         self.adapter_id = adapter_id
         self.runtime_type = runtime_type
         self.degraded_mode = degraded_mode
         self.unsupported_features = unsupported_features
         self.qualification_status = qualification_status
+        self.optional_enrichments = optional_enrichments or []
+        self.governed_surfaces = governed_surfaces or []
 
     def descriptor(self) -> dict[str, object]:
+        contract = {
+            "required_facts": list(REQUIRED_FACTS),
+            "required_operations": list(REQUIRED_OPERATIONS),
+            "capability_model": {
+                "declaration_field": "capabilities",
+                "evidence_name": "capability_decl",
+                "reference_workflow_classes": list(PHASE1_REFERENCE_WORKFLOW_CLASSES),
+                "notes": (
+                    "Workers declare string capabilities; Phase 1 routing defaults and regression coverage "
+                    "use the workflow-class labels as the reference vocabulary."
+                ),
+            },
+            "optional_enrichments": {
+                "implemented": list(self.optional_enrichments),
+                "unsupported": list(self.unsupported_features),
+            },
+            "degraded_mode_expectations": {
+                "behavior": self.degraded_mode,
+                "controller_authority_preserved": True,
+                "unsupported_features_must_be_declared": True,
+            },
+            "qualification_expectations": list(QUALIFICATION_EXPECTATIONS),
+            "validation_commands": list(SHARED_VALIDATION_COMMANDS),
+            "release_gate_criteria": list(RELEASE_GATE_CRITERIA),
+        }
         return {
             "adapter_id": self.adapter_id,
             "runtime_type": self.runtime_type,
-            "supported_operations": [
-                "discover_workers",
-                "probe",
-                "dispatch",
-                "capture",
-                "interrupt",
-                "acknowledge_delivery",
-            ],
+            "supported_operations": list(REQUIRED_OPERATIONS),
             "unsupported_features": self.unsupported_features,
+            "governed_surfaces": self.governed_surfaces,
             "degraded_mode_behavior": self.degraded_mode,
             "qualification_status": self.qualification_status,
+            "contract": contract,
         }
 
     def discover_workers(self, repo_root, **kwargs) -> list[dict[str, object]]:
@@ -164,23 +240,50 @@ class BaseTmuxAdapter:
         }
 
     def validate_contract(self) -> dict[str, object]:
-        required_operations = [
-            "discover_workers",
-            "probe",
-            "dispatch",
-            "capture",
-            "interrupt",
-            "acknowledge_delivery",
-        ]
+        contract = self.descriptor()["contract"]
         checks = {
-            "required_operations_present": all(callable(getattr(self, name, None)) for name in required_operations),
+            "required_operations_present": all(callable(getattr(self, name, None)) for name in REQUIRED_OPERATIONS),
+            "required_facts_declared": contract["required_facts"] == REQUIRED_FACTS,
+            "capability_model_declared": (
+                contract["capability_model"]["declaration_field"] == "capabilities"
+                and contract["capability_model"]["evidence_name"] == "capability_decl"
+                and bool(contract["capability_model"]["reference_workflow_classes"])
+            ),
             "unsupported_features_declared": isinstance(self.unsupported_features, list),
             "degraded_mode_declared": bool(self.degraded_mode),
+            "qualification_expectations_declared": bool(contract["qualification_expectations"]),
         }
         checks["ok"] = all(checks.values())
-        checks["required_operations"] = required_operations
+        checks["required_operations"] = list(REQUIRED_OPERATIONS)
+        checks["required_facts"] = list(REQUIRED_FACTS)
+        checks["capability_model"] = contract["capability_model"]
+        checks["qualification_expectations"] = contract["qualification_expectations"]
+        checks["validation_commands"] = contract["validation_commands"]
+        checks["release_gate_criteria"] = contract["release_gate_criteria"]
         checks["unsupported_features"] = self.unsupported_features
         return checks
+
+    def qualification_gate(
+        self,
+        validation: dict[str, object] | None = None,
+        *,
+        release_candidate: bool | None = None,
+    ) -> dict[str, object]:
+        validation = validation or self.validate_contract()
+        declared_first_class_candidate = self.qualification_status == "reference"
+        release_gate_candidate = declared_first_class_candidate if release_candidate is None else release_candidate
+        shared_contract_passed = bool(validation.get("ok"))
+        blocked_reasons: list[str] = []
+        if release_gate_candidate and not shared_contract_passed:
+            blocked_reasons.append("shared_contract_failed")
+        return {
+            "declared_status": self.qualification_status,
+            "declared_first_class_candidate": declared_first_class_candidate,
+            "release_gate_candidate": release_gate_candidate,
+            "shared_contract_passed": shared_contract_passed,
+            "first_class_eligible": release_gate_candidate and shared_contract_passed,
+            "blocked_reasons": blocked_reasons,
+        }
 
     def _send_keys(self, worker: dict[str, object], keys: list[str]) -> None:
         result = subprocess.run(

@@ -16,6 +16,8 @@ class CodexAdapter(BaseTmuxAdapter):
             degraded_mode="Falls back to tmux-observed pane presence and declared capabilities when Codex CLI flags are unavailable.",
             unsupported_features=["token_budget", "structured_progress", "checkpoint_hints"],
             qualification_status="reference",
+            optional_enrichments=["runtime_permission_surface"],
+            governed_surfaces=["mcp"],
         )
 
     def probe(self, worker: dict[str, object]) -> list[dict[str, object]]:
@@ -32,11 +34,11 @@ class CodexAdapter(BaseTmuxAdapter):
         if "codex" in capture:
             permission_value["approval_policy"] = "yolo" if "--yolo" in capture else "guarded"
             sandbox_match = re.search(r"--sandbox(?:\s|=)+([a-z0-9._-]+)", capture)
-            model_match = re.search(r"--model(?:\s|=)+([a-z0-9._-]+)", capture)
+            model_match = re.search(r"--model(?:\s|=)+([^\s]+)", capture)
             if sandbox_match:
                 permission_value["sandbox"] = sandbox_match.group(1)
             if model_match:
-                permission_value["model"] = model_match.group(1)
+                permission_value["model"] = _normalize_model_token(model_match.group(1))
             confidence = "medium"
 
         evidence.append(
@@ -53,3 +55,10 @@ class CodexAdapter(BaseTmuxAdapter):
             ).as_dict()
         )
         return evidence
+
+
+def _normalize_model_token(token: str) -> str:
+    match = re.match(r"[a-z][a-z0-9]*(?:-[a-z0-9]+|\.[0-9]+)*", token.strip().lower())
+    if match:
+        return match.group(0)
+    return token.strip()

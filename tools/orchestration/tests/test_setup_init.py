@@ -48,18 +48,198 @@ class SetupInitTests(unittest.TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self.temp_dir)
 
-    def run_cli(self, *args: str) -> subprocess.CompletedProcess[str]:
+    def run_cli(
+        self,
+        *args: str,
+        env_overrides: dict[str, str | None] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        env = self.env.copy()
+        if env_overrides:
+            for key, value in env_overrides.items():
+                if value is None:
+                    env.pop(key, None)
+                else:
+                    env[key] = value
         return subprocess.run(
             CLI + ["--repo", str(self.repo_root), *args],
             cwd=REPO_ROOT,
-            env=self.env,
+            env=env,
             capture_output=True,
             text=True,
             check=False,
         )
 
+    def init_repo(self) -> None:
+        result = self.run_cli("setup", "init")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def iso_now(self, *, seconds_ago: int = 0) -> str:
         return (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).replace(microsecond=0).isoformat()
+
+    def make_fake_bin(self, *commands: str) -> str:
+        bin_dir = self.temp_dir / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        for command in commands:
+            target = bin_dir / command
+            if command == "python3":
+                target.symlink_to(Path(sys.executable))
+                continue
+            target.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            target.chmod(0o755)
+        return str(bin_dir)
+
+    def seed_worker_row(
+        self,
+        *,
+        worker_id: str,
+        runtime_type: str,
+        adapter_id: str,
+        state: str = "ready",
+        capabilities: list[str] | None = None,
+    ) -> None:
+        state_db = self.repo_root / ".codex" / "orchestration" / "state.db"
+        conn = sqlite3.connect(state_db)
+        try:
+            conn.execute(
+                """
+                INSERT INTO workers (
+                    worker_id, runtime_type, adapter_id, tmux_socket, tmux_session, tmux_pane,
+                    state, capabilities, required_signal_status, last_evidence_at,
+                    last_heartbeat_at, interruptibility, operator_tags
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    worker_id,
+                    runtime_type,
+                    adapter_id,
+                    self.env["TMUX_SOCKET"],
+                    self.env["TMUX_SESSION"],
+                    "%1",
+                    state,
+                    json.dumps(capabilities or [runtime_type]),
+                    "required_only",
+                    self.iso_now(),
+                    self.iso_now(),
+                    "interruptible",
+                    json.dumps(["registered"]),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def start_tmux_worker(self, name: str) -> tuple[str, str, str]:
+        if shutil.which("tmux") is None:
+            self.skipTest("tmux not available")
+        tmux_dir = self.temp_dir / f"tmux-{name}"
+        tmux_dir.mkdir(exist_ok=True)
+        socket = tmux_dir / f"{name}.sock"
+        session = f"macs-{name}-{os.getpid()}"
+        subprocess.run(
+            ["tmux", "-S", str(socket), "new-session", "-d", "-s", session, "-n", "worker"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        pane_id = subprocess.run(
+            ["tmux", "-S", str(socket), "list-panes", "-t", session, "-F", "#{pane_id}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        self.addCleanup(
+            subprocess.run,
+            ["tmux", "-S", str(socket), "kill-server"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return str(socket), session, pane_id
+
+    def seed_interrupted_recovery_run(
+        self,
+        *,
+        task_id: str = "task-startup-interrupted-recovery",
+        recovery_run_id: str = "recovery-startup-interrupted-task",
+    ) -> tuple[Path, str]:
+        orchestration_dir = self.repo_root / ".codex" / "orchestration"
+        state_db = orchestration_dir / "state.db"
+        events_ndjson = orchestration_dir / "events.ndjson"
+
+        create_task(
+            state_db,
+            events_ndjson,
+            TaskRecord(
+                task_id=task_id,
+                title="Interrupted restart recovery",
+                description="Interrupted restart recovery",
+                workflow_class="implementation",
+                intent="Interrupted restart recovery",
+                required_capabilities=[],
+                protected_surfaces=["docs/startup-recovery.md"],
+                priority="normal",
+                state="reconciliation",
+                current_worker_id=None,
+                current_lease_id=None,
+                routing_policy_ref="phase1-defaults-v1",
+            ),
+            EventRecord(
+                event_id=f"evt-task-seed-{task_id}",
+                event_type="task.created",
+                aggregate_type="task",
+                aggregate_id=task_id,
+                timestamp=self.iso_now(seconds_ago=20),
+                actor_type="controller",
+                actor_id="controller-main",
+                correlation_id=f"corr-task-seed-{task_id}",
+                causation_id=None,
+                payload={"task_id": task_id},
+                redaction_level="none",
+            ),
+        )
+
+        conn = sqlite3.connect(state_db)
+        try:
+            conn.execute(
+                """
+                INSERT INTO recovery_runs (
+                    recovery_run_id, task_id, state, started_at, ended_at, anomaly_summary, decision_summary
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    recovery_run_id,
+                    task_id,
+                    "pending_retry",
+                    self.iso_now(seconds_ago=15),
+                    None,
+                    json.dumps(
+                        {
+                            "kind": "ambiguous_ownership",
+                            "basis": "worker_state_unavailable",
+                            "predecessor_worker_id": "worker-startup-predecessor",
+                            "predecessor_lease_id": "lease-startup-predecessor",
+                        },
+                        sort_keys=True,
+                    ),
+                    json.dumps(
+                        {
+                            "allowed_next_actions": [
+                                f"macs recovery retry --task {task_id}",
+                                f"macs recovery reconcile --task {task_id}",
+                            ],
+                            "proposed_worker_id": "worker-startup-successor",
+                            "proposed_workflow_class": "implementation",
+                            "recommended_action": "retry",
+                            "recovery_phase": "predecessor_revoked",
+                        },
+                        sort_keys=True,
+                    ),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return state_db, recovery_run_id
 
     def test_setup_init_creates_repo_local_layout(self) -> None:
         result = self.run_cli("setup", "init")
@@ -80,7 +260,239 @@ class SetupInitTests(unittest.TestCase):
         self.assertIn("controller_lock", payload["data"])
         self.assertEqual(payload["data"]["state_db_status"], "created")
         self.assertEqual(payload["data"]["events_ndjson_status"], "created")
+        self.assertEqual(payload["data"]["governance_policy"]["status"], "created")
+        self.assertTrue(payload["data"]["governance_policy"]["path"].endswith("governance-policy.json"))
         self.assertFalse(payload["data"]["startup_summary"]["assignments_blocked"])
+
+    def test_setup_init_bootstraps_repo_local_governance_policy_file(self) -> None:
+        result = self.run_cli("setup", "init", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        governance_path = self.repo_root / ".codex" / "orchestration" / "governance-policy.json"
+        self.assertTrue(governance_path.exists())
+        governance_policy = json.loads(governance_path.read_text(encoding="utf-8"))
+        self.assertEqual(governance_policy["policy_version"], "phase1-governance-v1")
+        self.assertIn("audit_content", governance_policy)
+        self.assertIn("governed_surfaces", governance_policy)
+
+    def test_setup_init_bootstraps_separate_config_domain_files(self) -> None:
+        result = self.run_cli("setup", "init", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["data"]["controller_defaults"]["status"], "created")
+        self.assertEqual(payload["data"]["adapter_settings"]["status"], "created")
+        self.assertEqual(payload["data"]["state_layout"]["status"], "created")
+
+        controller_defaults_path = self.repo_root / ".codex" / "orchestration" / "controller-defaults.json"
+        adapter_settings_path = self.repo_root / ".codex" / "orchestration" / "adapter-settings.json"
+        state_layout_path = self.repo_root / ".codex" / "orchestration" / "state-layout.json"
+
+        self.assertTrue(controller_defaults_path.exists())
+        self.assertTrue(adapter_settings_path.exists())
+        self.assertTrue(state_layout_path.exists())
+
+        controller_defaults = json.loads(controller_defaults_path.read_text(encoding="utf-8"))
+        self.assertEqual(controller_defaults["defaults_version"], "phase1-controller-defaults-v1")
+        self.assertEqual(controller_defaults["task"]["default_workflow_class"], "implementation")
+
+        adapter_settings = json.loads(adapter_settings_path.read_text(encoding="utf-8"))
+        self.assertEqual(adapter_settings["settings_version"], "phase1-adapter-settings-v1")
+        self.assertTrue(adapter_settings["adapters"]["codex"]["enabled"])
+
+        state_layout = json.loads(state_layout_path.read_text(encoding="utf-8"))
+        self.assertEqual(state_layout["layout_version"], "phase1-state-layout-v1")
+        self.assertEqual(state_layout["paths"]["state_db"], "state.db")
+        self.assertIn("tmux_session_file", state_layout["compatibility_paths"])
+
+    def test_setup_check_requires_existing_bootstrap_and_stays_read_only(self) -> None:
+        result = self.run_cli("setup", "check", "--json")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["command"], "macs setup check")
+        self.assertIn("Run 'macs setup init' first", payload["error"]["message"])
+
+        orchestration_dir = self.repo_root / ".codex" / "orchestration"
+        self.assertFalse((orchestration_dir / "controller-defaults.json").exists())
+        self.assertFalse((orchestration_dir / "adapter-settings.json").exists())
+        self.assertFalse((orchestration_dir / "state-layout.json").exists())
+
+    def test_setup_check_reports_config_domains_and_workflow_defaults_in_json(self) -> None:
+        self.init_repo()
+
+        result = self.run_cli("setup", "check", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["command"], "macs setup check")
+
+        configuration = payload["data"]["configuration"]
+        self.assertEqual(
+            configuration["controller_defaults"]["values"]["task"]["default_workflow_class"],
+            "implementation",
+        )
+        self.assertTrue(configuration["adapter_settings"]["values"]["adapters"]["codex"]["enabled"])
+        self.assertIn("implementation", payload["data"]["workflow_defaults"])
+        self.assertTrue(payload["data"]["state_paths"]["state_db"].endswith("/state.db"))
+        self.assertTrue(
+            payload["data"]["compatibility_paths"]["tmux_session_file"].endswith(".codex/tmux-session.txt")
+        )
+        compatibility = payload["data"]["compatibility"]
+        self.assertFalse(compatibility["state_migration_required"])
+        self.assertTrue(compatibility["single_worker_mode_supported"])
+        self.assertIn("legacy_target_pane_file", compatibility["legacy_metadata"])
+        self.assertIn("./tools/tmux_bridge/snapshot.sh", compatibility["supported_unchanged_workflows"]["bridge_helpers"])
+        self.assertIn("macs task create --summary <text>", compatibility["superseded_by_control_plane"]["normal_orchestration"])
+
+    def test_setup_check_human_readable_lists_config_domains(self) -> None:
+        self.init_repo()
+
+        result = self.run_cli("setup", "check")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        self.assertIn("Configuration domains:", result.stdout)
+        self.assertIn("Controller defaults", result.stdout)
+        self.assertIn("Adapter settings", result.stdout)
+        self.assertIn("Routing policy", result.stdout)
+        self.assertIn("Governance policy", result.stdout)
+        self.assertIn("State layout", result.stdout)
+        self.assertIn("Default workflow class: implementation", result.stdout)
+        self.assertIn("Single-worker compatibility:", result.stdout)
+        self.assertIn("State migration required: no", result.stdout)
+        self.assertIn("Single-worker mode: supported", result.stdout)
+        self.assertIn("tools/tmux_bridge/target_pane.txt", result.stdout)
+        self.assertIn("Superseded by controller-owned commands:", result.stdout)
+
+    def test_setup_validate_blocks_before_bootstrap(self) -> None:
+        result = self.run_cli("setup", "validate", "--json")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["command"], "macs setup validate")
+        self.assertEqual(payload["error"]["outcome"], "BLOCKED")
+        self.assertEqual(payload["error"]["next_action"], "macs setup init")
+        self.assertIn("Run 'macs setup init' first", payload["error"]["message"])
+        blocked_human = self.run_cli("setup", "validate")
+        self.assertEqual(blocked_human.returncode, 2, blocked_human.stdout + blocked_human.stderr)
+        self.assertIn("Outcome: BLOCKED", blocked_human.stderr)
+        self.assertIn("Next Action: macs setup init", blocked_human.stderr)
+
+    def test_setup_dry_run_is_read_only_and_reports_reference_examples(self) -> None:
+        result = self.run_cli("setup", "dry-run", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["command"], "macs setup dry-run")
+        steps = payload["data"]["dry_run"]["steps"]
+        self.assertEqual(steps[0]["command"], "macs setup init")
+        self.assertIn("macs worker discover --json", payload["data"]["dry_run"]["reference_examples"]["registration"])
+        self.assertIn("macs task pause --task <task-id> --confirm", payload["data"]["dry_run"]["reference_examples"]["intervention"][0])
+        self.assertIn("macs recovery inspect --task <task-id>", payload["data"]["dry_run"]["reference_examples"]["recovery"][0])
+        guidance = payload["data"]["dry_run"]["migration_guidance"]
+        self.assertFalse(guidance["state_migration_required"])
+        self.assertTrue(guidance["single_worker_mode_supported"])
+        self.assertIn("./tools/tmux_bridge/status.sh", guidance["supported_unchanged_workflows"]["bridge_helpers"])
+        self.assertIn("macs task inspect --task <task-id>", guidance["superseded_by_control_plane"]["normal_orchestration"])
+        self.assertFalse((self.repo_root / ".codex" / "orchestration").exists())
+
+    def test_setup_dry_run_human_readable_lists_conservative_steps(self) -> None:
+        result = self.run_cli("setup", "dry-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        self.assertIn("Conservative setup dry-run:", result.stdout)
+        self.assertIn("1. macs setup init", result.stdout)
+        self.assertIn("5. macs setup validate --json", result.stdout)
+        self.assertIn("7. macs recovery inspect --task <task-id>", result.stdout)
+        self.assertIn("Single-worker migration:", result.stdout)
+        self.assertIn("No repo-local state migration is required.", result.stdout)
+        self.assertIn("Legacy metadata:", result.stdout)
+        self.assertIn("tools/tmux_bridge/target_pane.txt", result.stdout)
+
+    def test_setup_validate_reports_partial_outcome_when_bootstrapped_but_not_ready(self) -> None:
+        self.init_repo()
+        fake_bin = self.make_fake_bin("python3", "tmux")
+
+        result = self.run_cli(
+            "setup",
+            "validate",
+            "--json",
+            env_overrides={"PATH": fake_bin},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        payload = json.loads(result.stdout)
+        validation = payload["data"]["validation"]
+        self.assertEqual(validation["outcome"], "PARTIAL")
+        self.assertFalse(validation["safe_ready_state_reached"])
+        self.assertIn("enabled adapter 'codex' runtime is not available on PATH", validation["gaps"])
+        self.assertIn("no ready workers are currently registered", validation["gaps"])
+
+    def test_setup_validate_passes_for_ready_enabled_adapters_in_scope(self) -> None:
+        self.init_repo()
+        adapter_settings_path = self.repo_root / ".codex" / "orchestration" / "adapter-settings.json"
+        settings = json.loads(adapter_settings_path.read_text(encoding="utf-8"))
+        settings["adapters"]["claude"]["enabled"] = False
+        settings["adapters"]["gemini"]["enabled"] = False
+        adapter_settings_path.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        self.seed_worker_row(worker_id="worker-codex-ready", runtime_type="codex", adapter_id="codex")
+        self.seed_worker_row(worker_id="worker-local-ready", runtime_type="local", adapter_id="local")
+        fake_bin = self.make_fake_bin("python3", "tmux", "codex")
+
+        result = self.run_cli(
+            "setup",
+            "validate",
+            "--json",
+            env_overrides={"PATH": fake_bin},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        payload = json.loads(result.stdout)
+        validation = payload["data"]["validation"]
+        self.assertEqual(validation["outcome"], "PASS")
+        self.assertTrue(validation["safe_ready_state_reached"])
+        self.assertEqual(validation["worker_summary"]["ready"], 2)
+        self.assertEqual(validation["adapter_summary"]["enabled_adapters"], ["codex", "local"])
+
+    def test_setup_validate_human_readable_reports_outcome_and_gaps(self) -> None:
+        self.init_repo()
+        fake_bin = self.make_fake_bin("python3", "tmux")
+
+        result = self.run_cli(
+            "setup",
+            "validate",
+            env_overrides={"PATH": fake_bin},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        self.assertIn("Outcome: PARTIAL", result.stdout)
+        self.assertIn("Safe Ready State: no", result.stdout)
+        self.assertIn("Enabled adapters:", result.stdout)
+        self.assertIn("Gaps:", result.stdout)
+        self.assertIn("enabled adapter 'codex' runtime is not available on PATH", result.stdout)
+
+    def test_setup_init_uses_custom_state_layout_paths_after_repo_local_edit(self) -> None:
+        self.init_repo()
+
+        state_layout_path = self.repo_root / ".codex" / "orchestration" / "state-layout.json"
+        state_layout = json.loads(state_layout_path.read_text(encoding="utf-8"))
+        state_layout["paths"]["state_db"] = "state/custom-state.db"
+        state_layout["paths"]["events_ndjson"] = "audit/custom-events.ndjson"
+        state_layout_path.write_text(json.dumps(state_layout, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        result = self.run_cli("setup", "init", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["data"]["state_db"].endswith("/state/custom-state.db"))
+        self.assertTrue(payload["data"]["events_ndjson"].endswith("/audit/custom-events.ndjson"))
+        self.assertTrue((self.repo_root / ".codex" / "orchestration" / "state" / "custom-state.db").exists())
+        self.assertTrue((self.repo_root / ".codex" / "orchestration" / "audit" / "custom-events.ndjson").exists())
 
     def test_setup_init_blocks_second_active_controller(self) -> None:
         holder = subprocess.Popen(
@@ -1116,6 +1528,33 @@ class SetupInitTests(unittest.TestCase):
         self.assertEqual(summary["unresolved_anomalies"]["unreleased_lock_count"], 0)
         self.assertIsNone(summary["recovery_run_id"])
 
+    def test_restart_summary_surfaces_unresolved_task_scoped_recovery_runs(self) -> None:
+        self.run_cli("setup", "init")
+        _, recovery_run_id = self.seed_interrupted_recovery_run()
+
+        result = self.run_cli("setup", "init", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        summary = payload["data"]["startup_summary"]
+
+        self.assertIn("pending_recovery_runs", summary)
+        self.assertEqual(len(summary["pending_recovery_runs"]), 1)
+        self.assertEqual(summary["pending_recovery_runs"][0]["recovery_run_id"], recovery_run_id)
+        self.assertEqual(summary["pending_recovery_runs"][0]["state"], "pending_retry")
+
+    def test_overview_keeps_restart_recovery_tasks_in_reconciliation(self) -> None:
+        self.test_restart_marks_live_ownership_for_reconciliation()
+
+        overview_result = self.run_cli("overview", "show", "--json")
+        self.assertEqual(overview_result.returncode, 0, overview_result.stderr)
+        overview_payload = json.loads(overview_result.stdout)
+        active_tasks = overview_payload["data"]["overview"]["active_tasks"]
+
+        self.assertEqual(active_tasks[0]["task_id"], "task-006")
+        self.assertEqual(active_tasks[0]["state"], "reconciliation")
+        self.assertEqual(active_tasks[0]["lease_state"], "suspended")
+        self.assertIsNone(active_tasks[0]["next_action"])
+
     def test_assign_rejects_when_startup_recovery_blocks_assignments(self) -> None:
         self.run_cli("setup", "init")
         orchestration_dir = self.repo_root / ".codex" / "orchestration"
@@ -1178,7 +1617,7 @@ class SetupInitTests(unittest.TestCase):
                 "backend/recovery_gate.py",
                 "--json",
             ).stdout
-        )["data"]["task"]["task_id"]
+        )["data"]["result"]["task"]["task_id"]
 
         conn = sqlite3.connect(state_db)
         try:
@@ -1194,16 +1633,129 @@ class SetupInitTests(unittest.TestCase):
             conn.close()
 
         assign_result = self.run_cli("task", "assign", "--task", task_id, "--json")
-        self.assertEqual(assign_result.returncode, 1)
+        self.assertEqual(assign_result.returncode, 5)
         payload = json.loads(assign_result.stdout)
+        self.assertEqual(payload["errors"][0]["code"], "degraded_precondition")
         self.assertEqual(
-            payload["error"]["message"],
+            payload["errors"][0]["message"],
             "Assignments are blocked pending startup recovery reconciliation",
         )
 
         inspect_payload = json.loads(self.run_cli("task", "inspect", "--task", task_id, "--json").stdout)
-        self.assertEqual(inspect_payload["data"]["task"]["state"], "pending_assignment")
-        self.assertIsNone(inspect_payload["data"]["task"]["current_lease_id"])
+        self.assertEqual(inspect_payload["task"]["state"], "pending_assignment")
+        self.assertIsNone(inspect_payload["task"]["current_lease_id"])
+
+    def test_explicit_reroute_can_resolve_startup_recovery_task_while_assignments_blocked(self) -> None:
+        if shutil.which("tmux") is None:
+            self.skipTest("tmux not available")
+
+        self.test_restart_marks_live_ownership_for_reconciliation()
+
+        orchestration_dir = self.repo_root / ".codex" / "orchestration"
+        state_db = orchestration_dir / "state.db"
+        tmux_dir = self.temp_dir / "tmux-reroute"
+        tmux_dir.mkdir()
+        socket = tmux_dir / "recovery.sock"
+        session = f"macs-recovery-{os.getpid()}"
+        subprocess.run(
+            ["tmux", "-S", str(socket), "new-session", "-d", "-s", session, "-n", "worker"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.addCleanup(
+            subprocess.run,
+            ["tmux", "-S", str(socket), "kill-server"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        pane = subprocess.run(
+            ["tmux", "-S", str(socket), "list-panes", "-t", session, "-F", "#{pane_id}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+        conn = sqlite3.connect(state_db)
+        try:
+            conn.execute(
+                """
+                INSERT INTO workers (
+                    worker_id, runtime_type, adapter_id, tmux_socket, tmux_session, tmux_pane,
+                    state, capabilities, required_signal_status, last_evidence_at,
+                    last_heartbeat_at, interruptibility, operator_tags
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "worker-reroute-startup-target",
+                    "codex",
+                    "codex",
+                    str(socket),
+                    session,
+                    pane,
+                    "ready",
+                    json.dumps(["implementation"]),
+                    "required_only",
+                    self.iso_now(seconds_ago=5),
+                    self.iso_now(seconds_ago=5),
+                    "interruptible",
+                    '["registered"]',
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        reroute_result = self.run_cli(
+            "task",
+            "reroute",
+            "--task",
+            "task-006",
+            "--worker",
+            "worker-reroute-startup-target",
+            "--confirm",
+            "--json",
+        )
+        self.assertEqual(reroute_result.returncode, 0, reroute_result.stdout + reroute_result.stderr)
+        payload = json.loads(reroute_result.stdout)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["data"]["result"]["decision_rights"]["decision_class"], "operator_confirmed")
+        self.assertEqual(payload["data"]["result"]["task"]["current_worker_id"], "worker-reroute-startup-target")
+
+        conn = sqlite3.connect(state_db)
+        try:
+            live_leases = conn.execute(
+                """
+                SELECT lease_id, state
+                FROM leases
+                WHERE task_id = ? AND state IN ('active', 'paused', 'suspended', 'expiring')
+                ORDER BY lease_id
+                """,
+                ("task-006",),
+            ).fetchall()
+            predecessor_row = conn.execute(
+                "SELECT state, replacement_lease_id FROM leases WHERE lease_id = ?",
+                ("lease-501",),
+            ).fetchone()
+            recovery_row = conn.execute(
+                """
+                SELECT state, decision_summary
+                FROM recovery_runs
+                WHERE task_id = ?
+                ORDER BY started_at DESC, recovery_run_id DESC
+                LIMIT 1
+                """,
+                ("task-006",),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        self.assertEqual(len(live_leases), 1)
+        self.assertEqual(predecessor_row[0], "replaced")
+        self.assertIsNotNone(predecessor_row[1])
+        self.assertEqual(recovery_row[0], "completed")
+        self.assertIn("worker-reroute-startup-target", recovery_row[1])
 
     def test_restart_summary_flags_pending_accept_leases_for_reconciliation(self) -> None:
         self.run_cli("setup", "init")
@@ -1482,8 +2034,8 @@ class SetupInitTests(unittest.TestCase):
         inspect_result = self.run_cli("worker", "inspect", "--worker", "worker-local-seeded", "--json")
         self.assertEqual(inspect_result.returncode, 0, inspect_result.stderr)
         inspect_payload = json.loads(inspect_result.stdout)
-        self.assertEqual(inspect_payload["data"]["worker"]["adapter_id"], "local")
-        self.assertEqual(inspect_payload["data"]["worker"]["state"], "ready")
+        self.assertEqual(inspect_payload["worker"]["adapter_id"], "local")
+        self.assertEqual(inspect_payload["worker"]["state"], "ready")
 
     def test_manual_disable_survives_health_reclassification_reads(self) -> None:
         self.run_cli("setup", "init")
@@ -1536,8 +2088,8 @@ class SetupInitTests(unittest.TestCase):
         inspect_result = self.run_cli("worker", "inspect", "--worker", "worker-local-disabled", "--json")
         self.assertEqual(inspect_result.returncode, 0, inspect_result.stderr)
         inspect_payload = json.loads(inspect_result.stdout)
-        self.assertEqual(inspect_payload["data"]["worker"]["state"], "unavailable")
-        self.assertIn("manual_disabled", inspect_payload["data"]["worker"]["operator_tags"])
+        self.assertEqual(inspect_payload["worker"]["state"], "unavailable")
+        self.assertIn("manual_disabled", inspect_payload["worker"]["operator_tags"])
 
         overview_result = self.run_cli("overview", "show", "--json")
         self.assertEqual(overview_result.returncode, 0, overview_result.stderr)
@@ -1565,6 +2117,65 @@ class SetupInitTests(unittest.TestCase):
         validate_payload = json.loads(validate_result.stdout)
         self.assertTrue(validate_payload["data"]["validation"]["ok"])
         self.assertIn("token_budget", validate_payload["data"]["validation"]["unsupported_features"])
+
+    def test_adapter_inspect_exposes_contributor_contract_in_json(self) -> None:
+        inspect_result = self.run_cli("adapter", "inspect", "--adapter", "codex", "--json")
+        self.assertEqual(inspect_result.returncode, 0, inspect_result.stderr)
+        inspect_payload = json.loads(inspect_result.stdout)
+        adapter = inspect_payload["data"]["adapter"]
+        contract = adapter["contract"]
+
+        self.assertEqual(
+            contract["required_operations"],
+            [
+                "discover_workers",
+                "probe",
+                "dispatch",
+                "capture",
+                "interrupt",
+                "acknowledge_delivery",
+            ],
+        )
+        self.assertIn("stable_worker_identity", contract["required_facts"])
+        self.assertEqual(contract["capability_model"]["declaration_field"], "capabilities")
+        self.assertEqual(contract["capability_model"]["evidence_name"], "capability_decl")
+        self.assertIn("implementation", contract["capability_model"]["reference_workflow_classes"])
+        self.assertIn("runtime_permission_surface", contract["optional_enrichments"]["implemented"])
+        self.assertIn("token_budget", contract["optional_enrichments"]["unsupported"])
+        self.assertIn("shared_contract_suite", contract["qualification_expectations"])
+        self.assertIn("RG1:evidence_based_first_class_qualification", contract["release_gate_criteria"])
+        self.assertIn(
+            "python3 -m unittest tools.orchestration.tests.test_adapter_contracts",
+            contract["validation_commands"],
+        )
+        self.assertIn(
+            "python3 -m unittest tools.orchestration.tests.test_controller_invariants",
+            contract["validation_commands"],
+        )
+
+    def test_adapter_inspect_human_readable_shows_contributor_guidance(self) -> None:
+        inspect_result = self.run_cli("adapter", "inspect", "--adapter", "codex")
+        self.assertEqual(inspect_result.returncode, 0, inspect_result.stderr)
+
+        self.assertIn("Required Facts:", inspect_result.stdout)
+        self.assertIn("Required Operations:", inspect_result.stdout)
+        self.assertIn("Capability Model:", inspect_result.stdout)
+        self.assertIn("Reference Workflow Classes:", inspect_result.stdout)
+        self.assertIn("documentation_context", inspect_result.stdout)
+        self.assertIn("Optional Enrichments:", inspect_result.stdout)
+        self.assertIn("Degraded Mode:", inspect_result.stdout)
+        self.assertIn("Qualification Steps:", inspect_result.stdout)
+        self.assertIn("Shared Validation Commands:", inspect_result.stdout)
+        self.assertIn("Release-Gate Criteria:", inspect_result.stdout)
+
+    def test_adapter_validate_human_readable_shows_shared_contract_checks(self) -> None:
+        validate_result = self.run_cli("adapter", "validate", "--adapter", "codex")
+        self.assertEqual(validate_result.returncode, 0, validate_result.stderr)
+
+        self.assertIn("Validation Checks:", validate_result.stdout)
+        self.assertIn("required_operations_present: PASS", validate_result.stdout)
+        self.assertIn("required_facts_declared: PASS", validate_result.stdout)
+        self.assertIn("capability_model_declared: PASS", validate_result.stdout)
 
     def test_adapter_probe_returns_normalized_evidence(self) -> None:
         self.run_cli("setup", "init")
@@ -1829,6 +2440,7 @@ class SetupInitTests(unittest.TestCase):
         orchestration_dir = self.repo_root / ".codex" / "orchestration"
         state_db = orchestration_dir / "state.db"
         events_ndjson = orchestration_dir / "events.ndjson"
+        tmux_socket, tmux_session, tmux_pane = self.start_tmux_worker("route")
 
         seed_event = EventRecord(
             event_id="evt-worker-seed-route-001",
@@ -1876,9 +2488,9 @@ class SetupInitTests(unittest.TestCase):
                         worker_id,
                         runtime_type,
                         adapter_id,
-                        "/tmp/route.sock",
-                        "route",
-                        "%1",
+                        tmux_socket,
+                        tmux_session,
+                        tmux_pane,
                         state,
                         capabilities,
                         "required_only",
@@ -1906,7 +2518,7 @@ class SetupInitTests(unittest.TestCase):
         )
         self.assertEqual(create_result.returncode, 0, create_result.stderr)
         create_payload = json.loads(create_result.stdout)
-        task_id = create_payload["data"]["task"]["task_id"]
+        task_id = create_payload["data"]["result"]["task"]["task_id"]
 
         assign_result = self.run_cli("task", "assign", "--task", task_id, "--json")
         self.assertEqual(assign_result.returncode, 0, assign_result.stderr)
@@ -1914,17 +2526,18 @@ class SetupInitTests(unittest.TestCase):
         result = assign_payload["data"]["result"]
 
         self.assertEqual(result["selected_worker_id"], "worker-codex-route")
-        self.assertEqual(result["task"]["state"], "reserved")
+        self.assertEqual(result["task"]["state"], "active")
         self.assertEqual(result["task"]["current_worker_id"], "worker-codex-route")
         self.assertIsNotNone(result["task"]["routing_decision"])
         self.assertEqual(result["task"]["routing_decision"]["selected_worker_id"], "worker-codex-route")
         self.assertEqual(len(result["locks"]), 1)
         self.assertEqual(result["locks"][0]["surface_ref"], "backend/api/server.py")
+        self.assertEqual(result["locks"][0]["state"], "active")
 
         inspect_result = self.run_cli("task", "inspect", "--task", task_id, "--json")
         self.assertEqual(inspect_result.returncode, 0, inspect_result.stderr)
         inspect_payload = json.loads(inspect_result.stdout)
-        inspected_task = inspect_payload["data"]["task"]
+        inspected_task = inspect_payload["task"]
         self.assertEqual(inspected_task["current_lease_id"], result["lease_id"])
         self.assertEqual(inspected_task["routing_policy_ref"], "phase1-defaults-v1")
         self.assertEqual(inspected_task["routing_decision"]["rationale"]["policy_version"], "phase1-defaults-v1")
@@ -1939,6 +2552,7 @@ class SetupInitTests(unittest.TestCase):
         orchestration_dir = self.repo_root / ".codex" / "orchestration"
         state_db = orchestration_dir / "state.db"
         events_ndjson = orchestration_dir / "events.ndjson"
+        tmux_socket, tmux_session, tmux_pane = self.start_tmux_worker("conflict")
 
         seed_event = EventRecord(
             event_id="evt-worker-seed-route-002",
@@ -1967,9 +2581,9 @@ class SetupInitTests(unittest.TestCase):
                     "worker-codex-conflict",
                     "codex",
                     "codex",
-                    "/tmp/route.sock",
-                    "route",
-                    "%2",
+                    tmux_socket,
+                    tmux_session,
+                    tmux_pane,
                     "ready",
                     '["implementation"]',
                     "required_only",
@@ -1996,7 +2610,7 @@ class SetupInitTests(unittest.TestCase):
                 "docs/architecture/",
                 "--json",
             ).stdout
-        )["data"]["task"]["task_id"]
+        )["data"]["result"]["task"]["task_id"]
         first_assign = self.run_cli("task", "assign", "--task", first_task, "--json")
         self.assertEqual(first_assign.returncode, 0, first_assign.stderr)
 
@@ -2014,10 +2628,10 @@ class SetupInitTests(unittest.TestCase):
                 "docs/architecture/decision.md",
                 "--json",
             ).stdout
-        )["data"]["task"]["task_id"]
+        )["data"]["result"]["task"]["task_id"]
 
         second_assign = self.run_cli("task", "assign", "--task", second_task, "--json")
-        self.assertEqual(second_assign.returncode, 1)
+        self.assertEqual(second_assign.returncode, 4)
         self.assertIn("conflicting_lock_id", second_assign.stdout + second_assign.stderr)
 
     def test_task_assign_rejects_stale_workers_without_prior_health_refresh(self) -> None:
@@ -2082,22 +2696,23 @@ class SetupInitTests(unittest.TestCase):
                 "backend/stale_routing.py",
                 "--json",
             ).stdout
-        )["data"]["task"]["task_id"]
+        )["data"]["result"]["task"]["task_id"]
 
         assign_result = self.run_cli("task", "assign", "--task", task_id, "--json")
-        self.assertEqual(assign_result.returncode, 1)
+        self.assertEqual(assign_result.returncode, 4)
         payload = json.loads(assign_result.stdout)
-        self.assertEqual(payload["error"]["message"], "No eligible workers for task")
+        self.assertEqual(payload["errors"][0]["message"], "No eligible workers for task")
 
         inspect_payload = json.loads(self.run_cli("task", "inspect", "--task", task_id, "--json").stdout)
-        self.assertEqual(inspect_payload["data"]["task"]["state"], "pending_assignment")
-        self.assertIsNone(inspect_payload["data"]["task"]["current_worker_id"])
+        self.assertEqual(inspect_payload["task"]["state"], "pending_assignment")
+        self.assertIsNone(inspect_payload["task"]["current_worker_id"])
 
     def test_privacy_sensitive_routing_prefers_local_only(self) -> None:
         self.run_cli("setup", "init")
         orchestration_dir = self.repo_root / ".codex" / "orchestration"
         state_db = orchestration_dir / "state.db"
         events_ndjson = orchestration_dir / "events.ndjson"
+        tmux_socket, tmux_session, tmux_pane = self.start_tmux_worker("privacy")
 
         seed_event = EventRecord(
             event_id="evt-worker-seed-route-003",
@@ -2131,9 +2746,9 @@ class SetupInitTests(unittest.TestCase):
                         worker_id,
                         runtime_type,
                         adapter_id,
-                        "/tmp/privacy.sock",
-                        "privacy",
-                        "%3",
+                        tmux_socket,
+                        tmux_session,
+                        tmux_pane,
                         "ready",
                         capabilities,
                         "required_only",
@@ -2160,11 +2775,85 @@ class SetupInitTests(unittest.TestCase):
                 "logical:privacy",
                 "--json",
             ).stdout
-        )["data"]["task"]["task_id"]
+        )["data"]["result"]["task"]["task_id"]
         assign_result = self.run_cli("task", "assign", "--task", task_id, "--json")
         self.assertEqual(assign_result.returncode, 0, assign_result.stderr)
         assign_payload = json.loads(assign_result.stdout)
         self.assertEqual(assign_payload["data"]["result"]["selected_worker_id"], "worker-local-privacy")
+
+    def test_privacy_sensitive_routing_reports_local_and_governed_surface_blockers(self) -> None:
+        self.run_cli("setup", "init")
+        orchestration_dir = self.repo_root / ".codex" / "orchestration"
+        state_db = orchestration_dir / "state.db"
+        events_ndjson = orchestration_dir / "events.ndjson"
+
+        seed_event = EventRecord(
+            event_id="evt-worker-seed-route-privacy-governed-001",
+            event_type="worker.seeded",
+            aggregate_type="worker",
+            aggregate_id="worker-codex-privacy-governed",
+            timestamp="2026-04-09T22:32:00+01:00",
+            actor_type="controller",
+            actor_id="controller-main",
+            correlation_id="corr-worker-seed-route-privacy-governed-001",
+            causation_id=None,
+            payload={"worker_id": "worker-codex-privacy-governed"},
+            redaction_level="none",
+        )
+
+        def mutator(conn):
+            conn.execute(
+                """
+                INSERT INTO workers (
+                    worker_id, runtime_type, adapter_id, tmux_socket, tmux_session, tmux_pane,
+                    state, capabilities, required_signal_status, last_evidence_at,
+                    last_heartbeat_at, interruptibility, operator_tags
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "worker-codex-privacy-governed",
+                    "codex",
+                    "codex",
+                    "/tmp/privacy-governed.sock",
+                    "privacy-governed",
+                    "%9",
+                    "ready",
+                    '["privacy_sensitive_offline"]',
+                    "required_only",
+                    self.iso_now(seconds_ago=5),
+                    self.iso_now(seconds_ago=5),
+                    "interruptible",
+                    '["registered","surface:mcp"]',
+                ),
+            )
+
+        write_eventful_transaction(state_db, events_ndjson, seed_event, mutator)
+
+        task_id = json.loads(
+            self.run_cli(
+                "task",
+                "create",
+                "--summary",
+                "Privacy governed blockers",
+                "--workflow-class",
+                "privacy_sensitive_offline",
+                "--require-capability",
+                "privacy_sensitive_offline",
+                "--surface",
+                "logical:privacy-governed",
+                "--json",
+            ).stdout
+        )["data"]["result"]["task"]["task_id"]
+
+        assign_result = self.run_cli("task", "assign", "--task", task_id, "--json")
+        self.assertEqual(assign_result.returncode, 4, assign_result.stdout + assign_result.stderr)
+        assign_payload = json.loads(assign_result.stdout)
+        rejected = assign_payload["data"]["result"]["routing_evaluation"]["rejected_workers"][0]
+        self.assertIn("privacy_sensitive_local_only", rejected["reasons"])
+        self.assertIn("governed_surface_not_allowlisted:mcp", rejected["reasons"])
+
+        inspect_payload = json.loads(self.run_cli("task", "inspect", "--task", task_id, "--json").stdout)
+        self.assertIn("privacy-sensitive routing rejected non-local workers", inspect_payload["task"]["blocking_condition"])
 
     def test_task_assign_reports_unknown_workflow_class_without_traceback(self) -> None:
         self.run_cli("setup", "init")
@@ -2228,12 +2917,12 @@ class SetupInitTests(unittest.TestCase):
                 "backend/typo.py",
                 "--json",
             ).stdout
-        )["data"]["task"]["task_id"]
+        )["data"]["result"]["task"]["task_id"]
 
         assign_result = self.run_cli("task", "assign", "--task", task_id, "--json")
-        self.assertEqual(assign_result.returncode, 1)
+        self.assertEqual(assign_result.returncode, 4)
         payload = json.loads(assign_result.stdout)
-        self.assertEqual(payload["error"]["message"], "Unsupported workflow class: implementaiton")
+        self.assertEqual(payload["errors"][0]["message"], "Unsupported workflow class: implementaiton")
         self.assertNotIn("Traceback", assign_result.stderr)
 
     def test_lease_and_event_inspection_surface_assignment_history(self) -> None:
@@ -2241,6 +2930,7 @@ class SetupInitTests(unittest.TestCase):
         orchestration_dir = self.repo_root / ".codex" / "orchestration"
         state_db = orchestration_dir / "state.db"
         events_ndjson = orchestration_dir / "events.ndjson"
+        tmux_socket, tmux_session, tmux_pane = self.start_tmux_worker("history")
 
         seed_event = EventRecord(
             event_id="evt-worker-seed-route-004",
@@ -2269,9 +2959,9 @@ class SetupInitTests(unittest.TestCase):
                     "worker-codex-history",
                     "codex",
                     "codex",
-                    "/tmp/history.sock",
-                    "history",
-                    "%6",
+                    tmux_socket,
+                    tmux_session,
+                    tmux_pane,
                     "ready",
                     '["implementation"]',
                     "required_only",
@@ -2298,7 +2988,7 @@ class SetupInitTests(unittest.TestCase):
                 "frontend/app.js",
                 "--json",
             ).stdout
-        )["data"]["task"]["task_id"]
+        )["data"]["result"]["task"]["task_id"]
         assign_payload = json.loads(self.run_cli("task", "assign", "--task", task_id, "--json").stdout)
         lease_id = assign_payload["data"]["result"]["lease_id"]
 
@@ -2306,7 +2996,7 @@ class SetupInitTests(unittest.TestCase):
         self.assertEqual(lease_inspect.returncode, 0, lease_inspect.stderr)
         lease_payload = json.loads(lease_inspect.stdout)
         self.assertEqual(lease_payload["data"]["lease"]["task_id"], task_id)
-        self.assertEqual(lease_payload["data"]["lease"]["state"], "pending_accept")
+        self.assertEqual(lease_payload["data"]["lease"]["state"], "active")
 
         lease_history = self.run_cli("lease", "history", "--task", task_id, "--json")
         self.assertEqual(lease_history.returncode, 0, lease_history.stderr)
@@ -2330,6 +3020,7 @@ class SetupInitTests(unittest.TestCase):
         orchestration_dir = self.repo_root / ".codex" / "orchestration"
         state_db = orchestration_dir / "state.db"
         events_ndjson = orchestration_dir / "events.ndjson"
+        tmux_socket, tmux_session, tmux_pane = self.start_tmux_worker("overview")
 
         seed_event = EventRecord(
             event_id="evt-worker-seed-overview-001",
@@ -2363,9 +3054,9 @@ class SetupInitTests(unittest.TestCase):
                         worker_id,
                         runtime_type,
                         runtime_type,
-                        "/tmp/overview.sock",
-                        "overview",
-                        "%7",
+                        tmux_socket,
+                        tmux_session,
+                        tmux_pane,
                         state,
                         capabilities,
                         "required_only",
@@ -2392,7 +3083,7 @@ class SetupInitTests(unittest.TestCase):
                 "src/main.ts",
                 "--json",
             ).stdout
-        )["data"]["task"]["task_id"]
+        )["data"]["result"]["task"]["task_id"]
         assign_result = self.run_cli("task", "assign", "--task", task_id, "--json")
         self.assertEqual(assign_result.returncode, 0, assign_result.stderr)
 
@@ -2403,7 +3094,7 @@ class SetupInitTests(unittest.TestCase):
 
         self.assertEqual(overview["worker_summary"]["ready"], 1)
         self.assertEqual(overview["worker_summary"]["degraded"], 1)
-        self.assertEqual(overview["task_summary"]["reserved"], 1)
+        self.assertEqual(overview["task_summary"]["active"], 1)
         self.assertEqual(overview["locks"]["held_or_reserved"], 1)
         self.assertEqual(len(overview["active_alerts"]), 1)
         self.assertEqual(overview["active_tasks"][0]["task_id"], task_id)
@@ -2467,6 +3158,7 @@ class SetupInitTests(unittest.TestCase):
         orchestration_dir = self.repo_root / ".codex" / "orchestration"
         state_db = orchestration_dir / "state.db"
         events_ndjson = orchestration_dir / "events.ndjson"
+        tmux_socket, tmux_session, tmux_pane = self.start_tmux_worker("health-route")
 
         seed_event = EventRecord(
             event_id="evt-worker-seed-health-002",
@@ -2512,9 +3204,9 @@ class SetupInitTests(unittest.TestCase):
                         worker_id,
                         runtime_type,
                         adapter_id,
-                        "/tmp/health-route.sock",
-                        "health",
-                        "%9",
+                        tmux_socket,
+                        tmux_session,
+                        tmux_pane,
                         "ready",
                         capabilities,
                         "required_only",
@@ -2542,7 +3234,7 @@ class SetupInitTests(unittest.TestCase):
                 "pkg/service.py",
                 "--json",
             ).stdout
-        )["data"]["task"]["task_id"]
+        )["data"]["result"]["task"]["task_id"]
         assign_result = self.run_cli("task", "assign", "--task", task_id, "--json")
         self.assertEqual(assign_result.returncode, 0, assign_result.stderr)
         assign_payload = json.loads(assign_result.stdout)

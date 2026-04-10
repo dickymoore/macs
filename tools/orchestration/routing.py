@@ -9,7 +9,15 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from tools.orchestration.policy import load_routing_policy
+from tools.orchestration.adapters.registry import get_adapter
+from tools.orchestration.config import adapter_enabled, adapter_settings_path, load_adapter_settings
+from tools.orchestration.policy import (
+    evaluate_worker_governance,
+    governance_policy_path,
+    governance_rejection_reasons,
+    load_governance_policy,
+    load_routing_policy,
+)
 from tools.orchestration.store import EventRecord, connect_state_db, write_eventful_transaction
 from tools.orchestration.workers import inspect_worker, list_workers
 
@@ -25,6 +33,8 @@ class RoutingEvaluation:
     rejected_workers: list[dict[str, object]]
     policy_version: str
     policy_path: str
+    governance_policy_version: str
+    governance_policy_path: str
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -33,6 +43,8 @@ class RoutingEvaluation:
             "rejected_workers": self.rejected_workers,
             "policy_version": self.policy_version,
             "policy_path": self.policy_path,
+            "governance_policy_version": self.governance_policy_version,
+            "governance_policy_path": self.governance_policy_path,
         }
 
 
@@ -47,8 +59,12 @@ def evaluate_task_routing(
     *,
     explicit_worker_id: str | None = None,
 ) -> RoutingEvaluation:
-    policy_path = repo_root / ".codex" / "orchestration" / "routing-policy.json"
+    orchestration_dir = repo_root / ".codex" / "orchestration"
+    policy_path = orchestration_dir / "routing-policy.json"
+    active_governance_policy_path = governance_policy_path(orchestration_dir)
+    adapter_settings = load_adapter_settings(adapter_settings_path(orchestration_dir))
     policy = load_routing_policy(policy_path)
+    governance_policy = load_governance_policy(active_governance_policy_path)
     workflow_defaults = policy["workflow_defaults"].get(task["workflow_class"])
     if workflow_defaults is None:
         raise RoutingError(f"Unsupported workflow class: {task['workflow_class']}")
@@ -60,6 +76,8 @@ def evaluate_task_routing(
         reasons = []
         if explicit_worker_id is not None and worker["worker_id"] != explicit_worker_id:
             reasons.append("not_explicit_target")
+        if not adapter_enabled(adapter_settings, str(worker["adapter_id"])):
+            reasons.append("adapter_disabled")
         if worker["state"] in workflow_defaults.get("disallowed_states", []):
             reasons.append(f"state:{worker['state']}")
         if worker["state"] not in {"ready", "busy"}:
@@ -70,6 +88,14 @@ def evaluate_task_routing(
             reasons.append("interruptibility_required")
         if workflow_defaults.get("forbid_networked_tools") and worker["runtime"] != "local":
             reasons.append("privacy_sensitive_local_only")
+        adapter_descriptor = get_adapter(str(worker["adapter_id"])).descriptor()
+        governance = evaluate_worker_governance(
+            worker,
+            adapter_descriptor,
+            governance_policy,
+            workflow_class=str(task["workflow_class"]),
+        )
+        reasons.extend(governance_rejection_reasons(governance))
         missing_capabilities = sorted(set(task["required_capabilities"]) - set(worker["capabilities"]))
         if missing_capabilities:
             reasons.append(f"missing_capabilities:{','.join(missing_capabilities)}")
@@ -82,6 +108,7 @@ def evaluate_task_routing(
             "freshness_seconds": worker["freshness_seconds"],
             "runtime_rank": runtime_rank,
             "reasons": reasons,
+            "governance": governance,
         }
         if reasons:
             rejected_workers.append(candidate)
@@ -96,6 +123,8 @@ def evaluate_task_routing(
         rejected_workers=rejected_workers,
         policy_version=policy["policy_version"],
         policy_path=str(policy_path),
+        governance_policy_version=str(governance_policy["policy_version"]),
+        governance_policy_path=str(active_governance_policy_path),
     )
 
 
@@ -115,6 +144,8 @@ def persist_routing_decision(
         "rejected_workers": evaluation.rejected_workers,
         "policy_version": evaluation.policy_version,
         "policy_path": evaluation.policy_path,
+        "governance_policy_version": evaluation.governance_policy_version,
+        "governance_policy_path": evaluation.governance_policy_path,
         "lock_check_result": lock_check_result,
     }
     event = EventRecord(
@@ -142,7 +173,13 @@ def persist_routing_decision(
                 task_id,
                 evaluation.selected_worker_id,
                 json.dumps(rationale, sort_keys=True),
-                json.dumps({"policy_path": evaluation.policy_path}, sort_keys=True),
+                json.dumps(
+                    {
+                        "policy_path": evaluation.policy_path,
+                        "governance_policy_path": evaluation.governance_policy_path,
+                    },
+                    sort_keys=True,
+                ),
                 created_at,
             ),
         )
@@ -155,6 +192,55 @@ def persist_routing_decision(
         "rationale": rationale,
         "created_at": created_at,
     }
+
+
+def routing_blocking_condition(rejected_workers: list[dict[str, object]]) -> str:
+    reasons = {reason for worker in rejected_workers for reason in worker.get("reasons", [])}
+    has_privacy_local_only = "privacy_sensitive_local_only" in reasons
+    has_governance = any(reason.startswith("governed_surface_") or reason.startswith("undeclared_governed_surface:") for reason in reasons)
+    has_disabled_adapter = "adapter_disabled" in reasons
+    if has_disabled_adapter and not (has_privacy_local_only or has_governance):
+        return "repo-local adapter settings disabled the available workers"
+    if has_disabled_adapter and has_governance:
+        return "repo-local adapter settings and governance policy rejected the available workers"
+    if has_disabled_adapter and has_privacy_local_only:
+        return "repo-local adapter settings and privacy-sensitive routing rejected the available workers"
+    if has_privacy_local_only and has_governance:
+        return "privacy-sensitive routing rejected non-local workers and governance policy rejected governed surfaces"
+    if has_privacy_local_only:
+        return "privacy-sensitive routing rejected non-local workers"
+    if has_governance:
+        return "governance policy rejected governed surfaces for the available workers"
+    return "last routing attempt found no eligible workers"
+
+
+def routing_next_action(
+    *,
+    task_id: str,
+    rejected_workers: list[dict[str, object]],
+    governance_policy_path: str | None = None,
+    adapter_settings_path: str | None = None,
+) -> str:
+    reasons = {reason for worker in rejected_workers for reason in worker.get("reasons", [])}
+    has_privacy_local_only = "privacy_sensitive_local_only" in reasons
+    has_governance = any(reason.startswith("governed_surface_") or reason.startswith("undeclared_governed_surface:") for reason in reasons)
+    has_disabled_adapter = "adapter_disabled" in reasons
+    if has_disabled_adapter and adapter_settings_path:
+        return f"inspect {adapter_settings_path}, enable a safe adapter, then retry task {task_id}"
+    if has_privacy_local_only and has_governance:
+        if governance_policy_path:
+            return (
+                f"register or select a local worker without blocked governed surfaces, then inspect {governance_policy_path} "
+                f"before retrying task {task_id}"
+            )
+        return f"register or select a local worker without blocked governed surfaces before retrying task {task_id}"
+    if has_privacy_local_only:
+        return f"register or select a local worker before retrying task {task_id}"
+    if has_governance:
+        if governance_policy_path:
+            return f"inspect rejected workers and review {governance_policy_path} before retrying task {task_id}"
+        return f"inspect rejected workers and governance policy before retrying task {task_id}"
+    return f"inspect the last routing decision for task {task_id} before retrying"
 
 
 def inspect_routing_decision(state_db: Path, task_id: str) -> dict[str, object] | None:

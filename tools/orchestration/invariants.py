@@ -22,6 +22,9 @@ class InvariantViolationError(RuntimeError):
     """Raised when a requested task/lease transition would violate authority rules."""
 
 
+_UNSET = object()
+
+
 @dataclass(frozen=True)
 class TaskRecord:
     task_id: str
@@ -149,6 +152,9 @@ def transition_lease_state(
     ended_at: str | None,
     replacement_lease_id: str | None,
     event: EventRecord,
+    *,
+    accepted_at: str | None = None,
+    intervention_reason: object = _UNSET,
 ) -> None:
     def mutator(conn: sqlite3.Connection) -> None:
         lease = conn.execute(
@@ -177,13 +183,24 @@ def transition_lease_state(
                     f"Task {lease['task_id']} already has live lease {current_live['lease_id']}"
                 )
 
+        update_fields = [
+            "state = ?",
+            "accepted_at = COALESCE(?, accepted_at)",
+            "ended_at = ?",
+            "replacement_lease_id = COALESCE(?, replacement_lease_id)",
+        ]
+        params: list[object] = [new_state, accepted_at, ended_at, replacement_lease_id]
+        if intervention_reason is not _UNSET:
+            update_fields.append("intervention_reason = ?")
+            params.append(intervention_reason)
+        params.append(lease_id)
         conn.execute(
-            """
+            f"""
             UPDATE leases
-            SET state = ?, ended_at = ?, replacement_lease_id = COALESCE(?, replacement_lease_id)
+            SET {", ".join(update_fields)}
             WHERE lease_id = ?
             """,
-            (new_state, ended_at, replacement_lease_id, lease_id),
+            params,
         )
 
         if new_state in LIVE_LEASE_STATES:

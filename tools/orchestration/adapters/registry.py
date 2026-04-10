@@ -16,6 +16,8 @@ def build_adapter_registry() -> dict[str, BaseTmuxAdapter]:
             degraded_mode="Uses controller-observed tmux facts when Claude-specific telemetry is missing or stale.",
             unsupported_features=["token_budget", "structured_progress"],
             qualification_status="provisional",
+            optional_enrichments=[],
+            governed_surfaces=["mcp"],
         ),
         "gemini": BaseTmuxAdapter(
             adapter_id="gemini",
@@ -23,6 +25,8 @@ def build_adapter_registry() -> dict[str, BaseTmuxAdapter]:
             degraded_mode="Treats missing runtime signals as degraded and preserves only required pane and capability facts.",
             unsupported_features=["token_budget", "runtime_checkpoints"],
             qualification_status="provisional",
+            optional_enrichments=[],
+            governed_surfaces=["mcp"],
         ),
         "local": BaseTmuxAdapter(
             adapter_id="local",
@@ -30,6 +34,7 @@ def build_adapter_registry() -> dict[str, BaseTmuxAdapter]:
             degraded_mode="Keeps routing local-first and relies on tmux facts plus declared capabilities in low-signal mode.",
             unsupported_features=["token_budget", "structured_progress", "delivery_metadata"],
             qualification_status="provisional",
+            optional_enrichments=[],
         ),
     }
 

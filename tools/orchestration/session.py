@@ -12,8 +12,17 @@ from pathlib import Path
 
 import fcntl
 
+from tools.orchestration.config import (
+    adapter_settings_path,
+    bootstrap_config_domains,
+    ConfigBootstrapResult,
+    controller_defaults_path,
+    resolved_state_paths,
+    state_layout_or_default,
+    state_layout_path,
+)
 from tools.orchestration.recovery import StartupRecoverySummary, restore_startup_state
-from tools.orchestration.policy import PolicyBootstrapResult, bootstrap_routing_policy
+from tools.orchestration.policy import PolicyBootstrapResult, bootstrap_policies
 from tools.orchestration.store import StoreBootstrapResult, bootstrap_state_store
 
 
@@ -29,6 +38,9 @@ class OrchestrationPaths:
     repo_root: Path
     codex_dir: Path
     orchestration_dir: Path
+    controller_defaults_path: Path
+    adapter_settings_path: Path
+    state_layout_path: Path
     controller_lock: Path
     state_db: Path
     events_ndjson: Path
@@ -87,22 +99,33 @@ class ControllerSessionLock:
 def build_paths(repo_root: Path) -> OrchestrationPaths:
     codex_dir = repo_root / ".codex"
     orchestration_dir = codex_dir / "orchestration"
+    layout = state_layout_or_default(state_layout_path(orchestration_dir))
+    resolved_paths = resolved_state_paths(repo_root, orchestration_dir, layout)
     return OrchestrationPaths(
         repo_root=repo_root,
         codex_dir=codex_dir,
         orchestration_dir=orchestration_dir,
-        controller_lock=orchestration_dir / "controller.lock",
-        state_db=orchestration_dir / "state.db",
-        events_ndjson=orchestration_dir / "events.ndjson",
-        snapshots_dir=orchestration_dir / "snapshots",
-        checkpoints_dir=orchestration_dir / "checkpoints",
-        adapters_dir=orchestration_dir / "adapters",
+        controller_defaults_path=controller_defaults_path(orchestration_dir),
+        adapter_settings_path=adapter_settings_path(orchestration_dir),
+        state_layout_path=state_layout_path(orchestration_dir),
+        controller_lock=resolved_paths["controller_lock"],
+        state_db=resolved_paths["state_db"],
+        events_ndjson=resolved_paths["events_ndjson"],
+        snapshots_dir=resolved_paths["snapshots_dir"],
+        checkpoints_dir=resolved_paths["checkpoints_dir"],
+        adapters_dir=resolved_paths["adapters_dir"],
     )
 
 
 def ensure_layout(paths: OrchestrationPaths) -> None:
     paths.codex_dir.mkdir(parents=True, exist_ok=True)
     paths.orchestration_dir.mkdir(parents=True, exist_ok=True)
+    paths.controller_lock.parent.mkdir(parents=True, exist_ok=True)
+    paths.state_db.parent.mkdir(parents=True, exist_ok=True)
+    paths.events_ndjson.parent.mkdir(parents=True, exist_ok=True)
+    paths.snapshots_dir.mkdir(parents=True, exist_ok=True)
+    paths.checkpoints_dir.mkdir(parents=True, exist_ok=True)
+    paths.adapters_dir.mkdir(parents=True, exist_ok=True)
     paths.controller_lock.touch(exist_ok=True)
 
 
@@ -152,17 +175,18 @@ def render_lock_error(info: LockInfo) -> str:
 
 def ensure_orchestration_store(
     repo_root: Path,
-) -> tuple[OrchestrationPaths, StoreBootstrapResult, PolicyBootstrapResult]:
+) -> tuple[OrchestrationPaths, StoreBootstrapResult, ConfigBootstrapResult, PolicyBootstrapResult]:
     paths = build_paths(repo_root)
     ensure_layout(paths)
+    config_result = bootstrap_config_domains(paths.orchestration_dir)
     store_result = bootstrap_state_store(paths.state_db, paths.events_ndjson)
-    policy_result = bootstrap_routing_policy(paths.orchestration_dir, paths.state_db)
-    return paths, store_result, policy_result
+    policy_result = bootstrap_policies(paths.orchestration_dir, paths.state_db)
+    return paths, store_result, config_result, policy_result
 
 
 def setup_orchestration(
     repo_root: Path,
-) -> tuple[OrchestrationPaths, StoreBootstrapResult, StartupRecoverySummary]:
-    paths, store_result, _policy_result = ensure_orchestration_store(repo_root)
+) -> tuple[OrchestrationPaths, StoreBootstrapResult, ConfigBootstrapResult, PolicyBootstrapResult, StartupRecoverySummary]:
+    paths, store_result, config_result, policy_result = ensure_orchestration_store(repo_root)
     recovery_summary = restore_startup_state(paths.state_db, paths.events_ndjson)
-    return paths, store_result, recovery_summary
+    return paths, store_result, config_result, policy_result, recovery_summary

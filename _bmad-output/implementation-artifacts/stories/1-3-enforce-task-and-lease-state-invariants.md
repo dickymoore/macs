@@ -23,50 +23,50 @@ so that ownership never becomes ambiguous during normal progression.
 
 ## Tasks / Subtasks
 
-- [ ] Codify canonical task and lease state machines in controller-owned Python helpers instead of scattering raw strings across store code and tests. (AC: 1, 2, 3)
-  - [ ] Add a focused helper module under `tools/orchestration/` for state vocabularies, live-lease classification, and allowed transition checks. Brownfield-safe options include `tools/orchestration/state_machine.py` or `tools/orchestration/task_lease.py`; do not rename the just-landed `tools/orchestration/store.py` seam unless the change is strictly mechanical and low risk.  
+- [x] Codify canonical task and lease state machines in controller-owned Python helpers instead of scattering raw strings across store code and tests. (AC: 1, 2, 3)
+  - [x] Add a focused helper module under `tools/orchestration/` for state vocabularies, live-lease classification, and allowed transition checks. Brownfield-safe options include `tools/orchestration/state_machine.py` or `tools/orchestration/task_lease.py`; do not rename the just-landed `tools/orchestration/store.py` seam unless the change is strictly mechanical and low risk.  
         [Source: _bmad-output/planning-artifacts/architecture.md#recommended-module-shape] [Source: tools/orchestration/store.py]
-  - [ ] Encode the architecture-defined task transitions exactly: `draft -> pending_assignment -> reserved -> active`, `active -> intervention_hold|reconciliation|completed|failed`, `intervention_hold -> active|reconciliation`, `reconciliation -> reserved|failed`, and terminal archival transitions.  
+  - [x] Encode the architecture-defined task transitions exactly: `draft -> pending_assignment -> reserved -> active`, `active -> intervention_hold|reconciliation|completed|failed`, `intervention_hold -> active|reconciliation`, `reconciliation -> reserved|failed`, and terminal archival transitions.  
         [Source: _bmad-output/planning-artifacts/architecture.md#task-state-machine]
-  - [ ] Encode the lease transitions and semantics exactly, including that `active`, `paused`, `suspended`, and `expiring` are live states; `pending_accept` is not live yet; and `revoked`, `expired`, `completed`, `failed`, and `replaced` are historical states.  
+  - [x] Encode the lease transitions and semantics exactly, including that `active`, `paused`, `suspended`, and `expiring` are live states; `pending_accept` is not live yet; and `revoked`, `expired`, `completed`, `failed`, and `replaced` are historical states.  
         [Source: _bmad-output/planning-artifacts/architecture.md#lease-state-machine] [Source: _bmad-output/planning-artifacts/architecture.md#authoritative-domain-model]
-  - [ ] Choose and lock one consistent rule for task pointer fields. Brownfield-safe default: a `reserved` task may reference the `pending_accept` lease and candidate worker, while only live lease states count as active ownership. Capture that rule in tests so later stories do not drift.  
+  - [x] Choose and lock one consistent rule for task pointer fields. Brownfield-safe default: a `reserved` task may reference the `pending_accept` lease and candidate worker, while only live lease states count as active ownership. Capture that rule in tests so later stories do not drift.  
         [Inference from: _bmad-output/planning-artifacts/architecture.md#task-state-machine and _bmad-output/planning-artifacts/architecture.md#lease-state-machine]
 
-- [ ] Strengthen `tools/orchestration/store.py` so SQLite helps enforce task and lease invariants instead of storing unconstrained state text. (AC: 1, 2, 3, 4)
-  - [ ] Add schema-level guardrails where SQLite can enforce them directly: canonical-state validation, foreign keys between `tasks`, `leases`, and `workers` where current schema supports them, and indexes needed for `current_lease_id` / task live-lease lookups.  
+- [x] Strengthen `tools/orchestration/store.py` so SQLite helps enforce task and lease invariants instead of storing unconstrained state text. (AC: 1, 2, 3, 4)
+  - [x] Add schema-level guardrails where SQLite can enforce them directly: canonical-state validation, foreign keys between `tasks`, `leases`, and `workers` where current schema supports them, and indexes needed for `current_lease_id` / task live-lease lookups.  
         [Source: _bmad-output/planning-artifacts/architecture.md#authoritative-state-store] [Source: _bmad-output/planning-artifacts/architecture.md#persistence-strategy] [Source: tools/orchestration/store.py]
-  - [ ] Enforce the zero-or-one live lease rule with a partial unique index on `leases(task_id)` for live states (`active`, `paused`, `suspended`, `expiring`) or an equivalent transactional constraint if SQLite limitations make a different mechanism safer.  
+  - [x] Enforce the zero-or-one live lease rule with a partial unique index on `leases(task_id)` for live states (`active`, `paused`, `suspended`, `expiring`) or an equivalent transactional constraint if SQLite limitations make a different mechanism safer.  
         [Source: _bmad-output/planning-artifacts/architecture.md#authoritative-state-store] [Source: _bmad-output/planning-artifacts/architecture.md#authoritative-domain-model] [Inference from: tools/orchestration/store.py]
-  - [ ] Update authoritative mutation helpers so lease-state changes atomically clear, retain, or supersede `tasks.current_lease_id` and `tasks.current_worker_id` as appropriate. Terminal task states must not retain live leases, and a successor lease must not become live until the predecessor is revoked or replaced.  
+  - [x] Update authoritative mutation helpers so lease-state changes atomically clear, retain, or supersede `tasks.current_lease_id` and `tasks.current_worker_id` as appropriate. Terminal task states must not retain live leases, and a successor lease must not become live until the predecessor is revoked or replaced.  
         [Source: _bmad-output/planning-artifacts/architecture.md#lease-state-machine] [Source: _bmad-output/planning-artifacts/architecture.md#write-model] [Source: _bmad-output/planning-artifacts/architecture.md#test-layers]
-  - [ ] Keep `write_eventful_transaction` as the authoritative commit boundary or wrap it with narrower helpers; invariant failures must abort before any NDJSON append occurs.  
+  - [x] Keep `write_eventful_transaction` as the authoritative commit boundary or wrap it with narrower helpers; invariant failures must abort before any NDJSON append occurs.  
         [Source: _bmad-output/planning-artifacts/architecture.md#write-model] [Source: tools/orchestration/store.py]
 
-- [ ] Add minimal internal task and lease mutation APIs that later stories can reuse without prematurely freezing public operator commands. (AC: 1, 3, 4)
-  - [ ] Provide internal helpers for the minimum transition set Story 1.3 must prove end-to-end: seed or create a task, attach a `pending_accept` lease, activate the lease, move a live lease to `paused`, `suspended`, `expiring`, `revoked`, `expired`, `completed`, or `failed`, and mark a revoked predecessor as `replaced` when a successor is activated.  
+- [x] Add minimal internal task and lease mutation APIs that later stories can reuse without prematurely freezing public operator commands. (AC: 1, 3, 4)
+  - [x] Provide internal helpers for the minimum transition set Story 1.3 must prove end-to-end: seed or create a task, attach a `pending_accept` lease, activate the lease, move a live lease to `paused`, `suspended`, `expiring`, `revoked`, `expired`, `completed`, or `failed`, and mark a revoked predecessor as `replaced` when a successor is activated.  
         [Source: _bmad-output/planning-artifacts/architecture.md#lease-state-machine] [Source: _bmad-output/planning-artifacts/prd.md#technical-success]
-  - [ ] Keep `tools/orchestration/session.py` focused on repo/bootstrap responsibilities and keep `tools/orchestration/cli/main.py` thin. Story 1.3 should not turn into `macs task ...` or `macs lease ...` command work before Epic 4.  
+  - [x] Keep `tools/orchestration/session.py` focused on repo/bootstrap responsibilities and keep `tools/orchestration/cli/main.py` thin. Story 1.3 should not turn into `macs task ...` or `macs lease ...` command work before Epic 4.  
         [Source: tools/orchestration/session.py] [Source: tools/orchestration/cli/main.py] [Source: _bmad-output/planning-artifacts/sprint-plan-2026-04-09.md#dependency-notes]
-  - [ ] If a test-only seed surface is needed, keep it internal to Python helpers or hidden test fixtures rather than exposing premature public verbs.  
+  - [x] If a test-only seed surface is needed, keep it internal to Python helpers or hidden test fixtures rather than exposing premature public verbs.  
         [Inference from: tools/orchestration/cli/main.py and _bmad-output/planning-artifacts/sprint-plan-2026-04-09.md#recommended-first-story-queue]
 
-- [ ] Add explicit regression coverage for state-machine enforcement and ambiguous-ownership prevention. (AC: 1, 2, 3, 4)
-  - [ ] Add a dedicated stdlib `unittest` module such as `tools/orchestration/tests/test_task_lease_invariants.py` instead of overloading bootstrap tests with every transition case.  
+- [x] Add explicit regression coverage for state-machine enforcement and ambiguous-ownership prevention. (AC: 1, 2, 3, 4)
+  - [x] Add a dedicated stdlib `unittest` module such as `tools/orchestration/tests/test_task_lease_invariants.py` instead of overloading bootstrap tests with every transition case.  
         [Source: tools/orchestration/tests/test_setup_init.py] [Source: _bmad-output/project-context.md#testing-rules]
-  - [ ] Cover valid flows: `reserved + pending_accept`, `active + live lease`, `intervention_hold` with a paused or suspended live lease, and successor activation only after predecessor revocation or replacement.  
+  - [x] Cover valid flows: `reserved + pending_accept`, `active + live lease`, `intervention_hold` with a paused or suspended live lease, and successor activation only after predecessor revocation or replacement.  
         [Source: _bmad-output/planning-artifacts/architecture.md#task-state-machine] [Source: _bmad-output/planning-artifacts/architecture.md#lease-state-machine] [Source: _bmad-output/planning-artifacts/ux-design-specification.md#maintainer-intervenes-in-a-degraded-session]
-  - [ ] Cover invalid flows: second live lease for the same task, illegal direct transitions such as `draft -> active` or `active -> replaced`, terminal task states retaining live leases, and mismatched `current_lease_id` / `current_worker_id`.  
+  - [x] Cover invalid flows: second live lease for the same task, illegal direct transitions such as `draft -> active` or `active -> replaced`, terminal task states retaining live leases, and mismatched `current_lease_id` / `current_worker_id`.  
         [Source: _bmad-output/planning-artifacts/architecture.md#test-layers] [Source: _bmad-output/planning-artifacts/operator-cli-contract.md#canonical-state-vocabularies]
-  - [ ] Preserve Story 1.2 rollback guarantees by asserting failed invariant checks leave both SQLite rows and `events.ndjson` unchanged.  
+  - [x] Preserve Story 1.2 rollback guarantees by asserting failed invariant checks leave both SQLite rows and `events.ndjson` unchanged.  
         [Source: tools/orchestration/tests/test_setup_init.py] [Source: _bmad-output/planning-artifacts/architecture.md#write-model]
 
-- [ ] Keep brownfield compatibility and later Epic 1 work unblocked. (AC: 2, 3, 4)
-  - [ ] Preserve the existing Story 1.2 bootstrap contract in `macs setup init`, `tools/orchestration/session.py`, and `tools/orchestration/tests/test_setup_init.py`; Story 1.3 should extend the authoritative store seam, not reopen bootstrap design.  
+- [x] Keep brownfield compatibility and later Epic 1 work unblocked. (AC: 2, 3, 4)
+  - [x] Preserve the existing Story 1.2 bootstrap contract in `macs setup init`, `tools/orchestration/session.py`, and `tools/orchestration/tests/test_setup_init.py`; Story 1.3 should extend the authoritative store seam, not reopen bootstrap design.  
         [Source: _bmad-output/implementation-artifacts/stories/1-2-persist-authoritative-control-plane-entities.md#completion-notes-list] [Source: tools/orchestration/session.py] [Source: tools/orchestration/tests/test_setup_init.py]
-  - [ ] Leave restart boot sequencing, routing, protected-surface locks, and public intervention flows to Stories 1.4, 3.x, and 5.x. This story supplies the shared invariants those later stories depend on, but it should not implement their command surfaces or recovery engines yet.  
+  - [x] Leave restart boot sequencing, routing, protected-surface locks, and public intervention flows to Stories 1.4, 3.x, and 5.x. This story supplies the shared invariants those later stories depend on, but it should not implement their command surfaces or recovery engines yet.  
         [Source: _bmad-output/planning-artifacts/sprint-plan-2026-04-09.md#dependency-notes] [Source: _bmad-output/planning-artifacts/sprint-plan-2026-04-09.md#recommended-first-story-queue]
-  - [ ] Keep `tools/tmux_bridge/` transport-only and avoid introducing tmux dependencies into invariant tests. These semantics should be provable at the Python store layer.  
+  - [x] Keep `tools/tmux_bridge/` transport-only and avoid introducing tmux dependencies into invariant tests. These semantics should be provable at the Python store layer.  
         [Source: _bmad-output/project-context.md#testing-rules] [Source: _bmad-output/project-context.md#critical-implementation-rules]
 
 ## Dev Notes

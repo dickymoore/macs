@@ -8,8 +8,14 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from tools.orchestration.tasks import freeze_owned_active_tasks_for_worker
 from tools.orchestration.store import EventRecord, connect_state_db, write_eventful_transaction
 from tools.orchestration.workers import MANUAL_DISABLE_TAG, list_workers
+
+DEGRADED_SIGNAL_TAGS = {
+    "signal:budget_exhausted",
+    "signal:misleading_health",
+}
 
 
 def utc_now() -> str:
@@ -21,9 +27,32 @@ def classify_workers(state_db: Path, events_ndjson: Path) -> list[dict[str, obje
     changes = []
     for worker in workers:
         next_state = classify_worker_state(worker)
+        frozen = []
+        if next_state in {"degraded", "unavailable", "quarantined"}:
+            frozen = freeze_owned_active_tasks_for_worker(
+                state_db,
+                events_ndjson,
+                worker_id=worker["worker_id"],
+                worker_state=next_state,
+                evidence_summary={
+                    "worker_id": worker["worker_id"],
+                    "previous_state": worker["state"],
+                    "next_state": next_state,
+                    "freshness_seconds": worker["freshness_seconds"],
+                    "operator_tags": worker["operator_tags"],
+                },
+            )
         if next_state != worker["state"]:
             apply_worker_state(state_db, events_ndjson, worker, next_state)
-            changes.append({"worker_id": worker["worker_id"], "previous_state": worker["state"], "next_state": next_state})
+            changes.append(
+                {
+                    "worker_id": worker["worker_id"],
+                    "previous_state": worker["state"],
+                    "next_state": next_state,
+                    "operator_tags": worker["operator_tags"],
+                    "frozen_task_ids": [item["result"]["task"]["task_id"] for item in frozen],
+                }
+            )
     return changes
 
 
@@ -32,6 +61,10 @@ def classify_worker_state(worker: dict[str, object]) -> str:
         return "quarantined"
     if MANUAL_DISABLE_TAG in worker["operator_tags"]:
         return "unavailable"
+    if worker["state"] == "unavailable":
+        return "unavailable"
+    if DEGRADED_SIGNAL_TAGS.intersection(worker["operator_tags"]):
+        return "degraded"
     freshness = worker["freshness_seconds"]
     if freshness > 600:
         return "unavailable"
@@ -58,6 +91,7 @@ def apply_worker_state(state_db: Path, events_ndjson: Path, worker: dict[str, ob
             "previous_state": worker["state"],
             "next_state": next_state,
             "freshness_seconds": worker["freshness_seconds"],
+            "operator_tags": worker["operator_tags"],
         },
         redaction_level="none",
     )

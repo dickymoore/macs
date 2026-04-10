@@ -23,52 +23,52 @@ so that controller truth survives process restarts and normal orchestration acti
 
 ## Tasks / Subtasks
 
-- [ ] Add the control-plane persistence module under `tools/orchestration/` and keep it separate from `tools/tmux_bridge/`. (AC: 1, 3, 4)
-  - [ ] Introduce a brownfield-fit persistence package, for example `tools/orchestration/store.py` and `tools/orchestration/schema.py`, or an equivalent minimal split that keeps schema/bootstrap concerns separate from session-lock code.  
+- [x] Add the control-plane persistence module under `tools/orchestration/` and keep it separate from `tools/tmux_bridge/`. (AC: 1, 3, 4)
+  - [x] Introduce a brownfield-fit persistence package, for example `tools/orchestration/store.py` and `tools/orchestration/schema.py`, or an equivalent minimal split that keeps schema/bootstrap concerns separate from session-lock code.  
         [Source: _bmad-output/planning-artifacts/architecture.md#suggested-storage-layout] [Source: _bmad-output/implementation-artifacts/stories/1-1-start-a-single-controller-orchestration-session.md#tasks--subtasks]
-  - [ ] Extend the existing session bootstrap in `tools/orchestration/session.py` so Story 1.2 creates or verifies `state.db` and `events.ndjson` under `.codex/orchestration/` without relocating the Story 1.1 entrypoints.  
+  - [x] Extend the existing session bootstrap in `tools/orchestration/session.py` so Story 1.2 creates or verifies `state.db` and `events.ndjson` under `.codex/orchestration/` without relocating the Story 1.1 entrypoints.  
         [Source: tools/orchestration/session.py] [Source: _bmad-output/planning-artifacts/architecture.md#suggested-storage-layout]
-  - [ ] Keep root launchers and `macs setup init` thin; persistence wiring should remain reusable from the current bootstrap seam rather than introducing a second authority path.  
+  - [x] Keep root launchers and `macs setup init` thin; persistence wiring should remain reusable from the current bootstrap seam rather than introducing a second authority path.  
         [Source: tools/orchestration/cli/main.py] [Source: tools/tmux_bridge/start_controller.sh]
 
-- [ ] Define the MVP authoritative schema for controller-owned entities and supporting audit tables in SQLite. (AC: 1, 3, 4)
-  - [ ] Create tables for `workers`, `tasks`, `leases`, `locks`, and `events`, plus the architecture-recommended supporting tables needed to avoid later migration churn: `routing_decisions`, `evidence_records`, `recovery_runs`, and `policy_snapshots`.  
+- [x] Define the MVP authoritative schema for controller-owned entities and supporting audit tables in SQLite. (AC: 1, 3, 4)
+  - [x] Create tables for `workers`, `tasks`, `leases`, `locks`, and `events`, plus the architecture-recommended supporting tables needed to avoid later migration churn: `routing_decisions`, `evidence_records`, `recovery_runs`, and `policy_snapshots`.  
         [Source: _bmad-output/planning-artifacts/architecture.md#persistence-strategy]
-  - [ ] Model the required fields the architecture calls out for each entity, even if some fields are initially nullable until later stories populate them. This includes `current_worker_id` and `current_lease_id` on `tasks`, replacement linkage on `leases`, and aggregate or actor metadata on `events`.  
+  - [x] Model the required fields the architecture calls out for each entity, even if some fields are initially nullable until later stories populate them. This includes `current_worker_id` and `current_lease_id` on `tasks`, replacement linkage on `leases`, and aggregate or actor metadata on `events`.  
         [Source: _bmad-output/planning-artifacts/architecture.md#authoritative-domain-model]
-  - [ ] Choose deterministic primary-key and timestamp storage conventions that are easy to inspect from both Python and shell-based operator workflows. This is an implementation inference from the repo’s shell-first operating model and the need for replayable audit records.  
+  - [x] Choose deterministic primary-key and timestamp storage conventions that are easy to inspect from both Python and shell-based operator workflows. This is an implementation inference from the repo’s shell-first operating model and the need for replayable audit records.  
         [Inference from: _bmad-output/project-context.md#technology-stack--versions and _bmad-output/planning-artifacts/architecture.md#persistence-strategy]
 
-- [ ] Implement transactional write helpers that treat SQLite as canonical state and NDJSON as audit export. (AC: 1, 2, 3)
-  - [ ] Provide a single write path that mutates authoritative rows and inserts the corresponding `events` row inside one SQLite transaction before appending the matching record to `events.ndjson`.  
+- [x] Implement transactional write helpers that treat SQLite as canonical state and NDJSON as audit export. (AC: 1, 2, 3)
+  - [x] Provide a single write path that mutates authoritative rows and inserts the corresponding `events` row inside one SQLite transaction before appending the matching record to `events.ndjson`.  
         [Source: _bmad-output/planning-artifacts/architecture.md#write-model]
-  - [ ] Fail closed if the SQLite transaction cannot commit; do not emit NDJSON records for transitions that never became authoritative.  
+  - [x] Fail closed if the SQLite transaction cannot commit; do not emit NDJSON records for transitions that never became authoritative.  
         [Inference from: _bmad-output/planning-artifacts/architecture.md#write-model]
-  - [ ] Treat `events.ndjson` as an export mirror of authoritative events, not a second source of truth. The SQLite `events` table remains authoritative for later inspect and recovery commands.  
+  - [x] Treat `events.ndjson` as an export mirror of authoritative events, not a second source of truth. The SQLite `events` table remains authoritative for later inspect and recovery commands.  
         [Source: _bmad-output/planning-artifacts/architecture.md#persistence-strategy] [Source: _bmad-output/planning-artifacts/operator-cli-contract.md#required-json-payload-patterns]
-  - [ ] Ensure event payloads retain the minimum metadata later CLI and recovery stories will need: `event_id`, `event_type`, aggregate refs, actor identity, timestamp, correlation fields, and payload or redaction metadata.  
+  - [x] Ensure event payloads retain the minimum metadata later CLI and recovery stories will need: `event_id`, `event_type`, aggregate refs, actor identity, timestamp, correlation fields, and payload or redaction metadata.  
         [Source: _bmad-output/planning-artifacts/architecture.md#authoritative-domain-model] [Source: _bmad-output/planning-artifacts/operator-cli-contract.md#required-object-state-fields-in-json]
 
-- [ ] Expose a narrow bootstrap or diagnostic surface that proves persistence is live without over-scoping Story 1.2 into full task lifecycle commands. (AC: 1, 2, 4)
-  - [ ] Extend `macs setup init` output to confirm whether `state.db` and `events.ndjson` were created or verified, keeping output compact and compatible with the frozen CLI envelope.  
+- [x] Expose a narrow bootstrap or diagnostic surface that proves persistence is live without over-scoping Story 1.2 into full task lifecycle commands. (AC: 1, 2, 4)
+  - [x] Extend `macs setup init` output to confirm whether `state.db` and `events.ndjson` were created or verified, keeping output compact and compatible with the frozen CLI envelope.  
         [Source: tools/orchestration/cli/main.py] [Source: _bmad-output/planning-artifacts/operator-cli-contract.md#required-human-readable-output] [Source: _bmad-output/planning-artifacts/operator-cli-contract.md#json-envelope]
-  - [ ] If a dedicated internal seed or probe helper is needed for tests, keep it under `tools/orchestration/` and avoid exposing premature public verbs like `macs task create` before Story 4.2.  
+  - [x] If a dedicated internal seed or probe helper is needed for tests, keep it under `tools/orchestration/` and avoid exposing premature public verbs like `macs task create` before Story 4.2.  
         [Source: _bmad-output/planning-artifacts/sprint-plan-2026-04-09.md#dependency-notes]
 
-- [ ] Add regression coverage for schema bootstrap, transactional writes, and audit mirroring. (AC: 1, 2, 3, 4)
-  - [ ] Extend `tools/orchestration/tests/` with stdlib `unittest` coverage that verifies `setup init` now materializes `state.db` and `events.ndjson` in the repo-local orchestration directory.  
+- [x] Add regression coverage for schema bootstrap, transactional writes, and audit mirroring. (AC: 1, 2, 3, 4)
+  - [x] Extend `tools/orchestration/tests/` with stdlib `unittest` coverage that verifies `setup init` now materializes `state.db` and `events.ndjson` in the repo-local orchestration directory.  
         [Source: tools/orchestration/tests/test_setup_init.py] [Source: _bmad-output/project-context.md#testing-rules]
-  - [ ] Add focused Python tests for at least one successful entity mutation that commits SQLite rows and appends exactly one NDJSON event, plus one failure-path test that proves NDJSON is not appended when the transaction fails.  
+  - [x] Add focused Python tests for at least one successful entity mutation that commits SQLite rows and appends exactly one NDJSON event, plus one failure-path test that proves NDJSON is not appended when the transaction fails.  
         [Source: _bmad-output/planning-artifacts/architecture.md#write-model]
-  - [ ] Keep tmux-dependent coverage limited to bootstrap wiring; entity persistence tests should run without needing a live tmux server.  
+  - [x] Keep tmux-dependent coverage limited to bootstrap wiring; entity persistence tests should run without needing a live tmux server.  
         [Inference from: tools/orchestration/tests/test_setup_init.py and _bmad-output/project-context.md#testing-rules]
-  - [ ] Preserve existing Story 1.1 lock-contention coverage while updating its expectations from “files absent” to “files bootstrapped” where appropriate.  
+  - [x] Preserve existing Story 1.1 lock-contention coverage while updating its expectations from “files absent” to “files bootstrapped” where appropriate.  
         [Source: _bmad-output/implementation-artifacts/stories/1-1-start-a-single-controller-orchestration-session.md#completion-notes-list]
 
-- [ ] Update operator-facing documentation for the new authoritative artifacts and audit behavior. (AC: 2, 3)
-  - [ ] Update `README.md` and any directly affected getting-started text so `.codex/orchestration/state.db` and `.codex/orchestration/events.ndjson` are documented as repo-local control-plane artifacts.  
+- [x] Update operator-facing documentation for the new authoritative artifacts and audit behavior. (AC: 2, 3)
+  - [x] Update `README.md` and any directly affected getting-started text so `.codex/orchestration/state.db` and `.codex/orchestration/events.ndjson` are documented as repo-local control-plane artifacts.  
         [Source: README.md] [Source: docs/getting-started.md]
-  - [ ] Document the authority split clearly: SQLite is canonical state, NDJSON is append-friendly audit export, and tmux/runtime signals remain evidence rather than direct state mutation.  
+  - [x] Document the authority split clearly: SQLite is canonical state, NDJSON is append-friendly audit export, and tmux/runtime signals remain evidence rather than direct state mutation.  
         [Source: _bmad-output/planning-artifacts/architecture.md#state-authority-rules] [Source: _bmad-output/project-context.md#critical-dont-miss-rules]
 
 ## Dev Notes

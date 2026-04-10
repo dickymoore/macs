@@ -81,7 +81,13 @@ def bootstrap_state_store(state_db: Path, events_ndjson: Path) -> StoreBootstrap
     conn = connect_state_db(state_db)
     try:
         conn.execute("PRAGMA journal_mode=WAL")
-        conn.executescript(_schema_sql())
+        conn.executescript(_schema_sql(include_live_lease_index=False))
+        try:
+            conn.executescript(_live_lease_index_sql())
+        except sqlite3.IntegrityError:
+            # Startup recovery may need to suspend corrupted multi-live-lease state before the
+            # partial uniqueness index can be restored on a later bootstrap.
+            pass
         conn.execute(
             "INSERT OR IGNORE INTO metadata(key, value) VALUES('schema_version', ?)",
             (SCHEMA_VERSION,),
@@ -131,8 +137,8 @@ def write_eventful_transaction(
     append_event_export(events_ndjson, event)
 
 
-def _schema_sql() -> str:
-    return """
+def _schema_sql(*, include_live_lease_index: bool = True) -> str:
+    schema = """
     CREATE TABLE IF NOT EXISTS metadata (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -245,12 +251,20 @@ def _schema_sql() -> str:
         captured_at TEXT,
         payload TEXT
     );
+    """.format(
+        ",".join(f"'{state}'" for state in TASK_STATES),
+        ",".join(f"'{state}'" for state in LEASE_STATES),
+    )
+    if include_live_lease_index:
+        schema += _live_lease_index_sql()
+    return schema
 
+
+def _live_lease_index_sql() -> str:
+    return """
     CREATE UNIQUE INDEX IF NOT EXISTS idx_one_live_lease_per_task
     ON leases(task_id)
     WHERE state IN ({});
     """.format(
-        ",".join(f"'{state}'" for state in TASK_STATES),
-        ",".join(f"'{state}'" for state in LEASE_STATES),
         ",".join(f"'{state}'" for state in LIVE_LEASE_STATES),
     )
