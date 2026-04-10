@@ -154,7 +154,7 @@ def _scan_startup_state(state_db: Path) -> dict[str, object]:
             SELECT leases.lease_id, leases.state AS lease_state, tasks.task_id
             FROM leases
             INNER JOIN tasks ON tasks.task_id = leases.task_id
-            WHERE leases.state IN ('active', 'paused', 'suspended', 'expiring')
+            WHERE leases.state IN ('pending_accept', 'active', 'paused', 'suspended', 'expiring')
             ORDER BY tasks.task_id, leases.lease_id
             """
         ).fetchall()

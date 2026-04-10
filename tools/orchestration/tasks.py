@@ -127,6 +127,7 @@ def assign_task(
     task_id: str,
     explicit_worker_id: str | None = None,
 ) -> dict[str, object]:
+    _ensure_assignments_allowed(state_db)
     task = inspect_task(state_db, task_id)
     evaluation = evaluate_task_routing(repo_root, state_db, task, explicit_worker_id=explicit_worker_id)
     if evaluation.selected_worker_id is None:
@@ -228,3 +229,15 @@ def _row_to_task(row) -> dict[str, object]:
         "current_lease_id": row["current_lease_id"],
         "routing_policy_ref": row["routing_policy_ref"],
     }
+
+
+def _ensure_assignments_allowed(state_db: Path) -> None:
+    conn = connect_state_db(state_db)
+    try:
+        row = conn.execute(
+            "SELECT value FROM metadata WHERE key = 'assignments_blocked'"
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is not None and row["value"] == "1":
+        raise RoutingError("Assignments are blocked pending startup recovery reconciliation")

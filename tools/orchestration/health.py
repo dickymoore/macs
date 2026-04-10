@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from tools.orchestration.store import EventRecord, connect_state_db, write_eventful_transaction
-from tools.orchestration.workers import list_workers
+from tools.orchestration.workers import MANUAL_DISABLE_TAG, list_workers
 
 
 def utc_now() -> str:
@@ -30,6 +30,8 @@ def classify_workers(state_db: Path, events_ndjson: Path) -> list[dict[str, obje
 def classify_worker_state(worker: dict[str, object]) -> str:
     if worker["state"] == "quarantined":
         return "quarantined"
+    if MANUAL_DISABLE_TAG in worker["operator_tags"]:
+        return "unavailable"
     freshness = worker["freshness_seconds"]
     if freshness > 600:
         return "unavailable"

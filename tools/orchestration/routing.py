@@ -49,7 +49,9 @@ def evaluate_task_routing(
 ) -> RoutingEvaluation:
     policy_path = repo_root / ".codex" / "orchestration" / "routing-policy.json"
     policy = load_routing_policy(policy_path)
-    workflow_defaults = policy["workflow_defaults"][task["workflow_class"]]
+    workflow_defaults = policy["workflow_defaults"].get(task["workflow_class"])
+    if workflow_defaults is None:
+        raise RoutingError(f"Unsupported workflow class: {task['workflow_class']}")
     workers = list_workers(state_db)
     ranked_candidates: list[dict[str, object]] = []
     rejected_workers: list[dict[str, object]] = []
@@ -62,6 +64,8 @@ def evaluate_task_routing(
             reasons.append(f"state:{worker['state']}")
         if worker["state"] not in {"ready", "busy"}:
             reasons.append(f"not_routable:{worker['state']}")
+        if worker["freshness_seconds"] > 60:
+            reasons.append("stale_evidence")
         if workflow_defaults.get("require_interruptibility") and worker["interruptibility"] != "interruptible":
             reasons.append("interruptibility_required")
         if workflow_defaults.get("forbid_networked_tools") and worker["runtime"] != "local":

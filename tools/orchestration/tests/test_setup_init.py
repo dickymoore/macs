@@ -13,9 +13,11 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from tools.orchestration.adapters.codex import CodexAdapter
 from tools.orchestration.invariants import (
     InvariantViolationError,
     LeaseRecord,
@@ -1034,6 +1036,14 @@ class SetupInitTests(unittest.TestCase):
         try:
             conn.execute(
                 """
+                UPDATE tasks
+                SET current_worker_id = ?, current_lease_id = ?
+                WHERE task_id = ?
+                """,
+                ("worker-codex-pending", "lease-pending-accept", "task-pending-accept"),
+            )
+            conn.execute(
+                """
                 INSERT INTO locks (
                     lock_id, target_type, target_ref, mode, state, task_id, lease_id,
                     policy_origin, created_at, released_at
@@ -1105,6 +1115,235 @@ class SetupInitTests(unittest.TestCase):
         self.assertEqual(summary["unresolved_anomalies"]["suspended_lease_ids"], [])
         self.assertEqual(summary["unresolved_anomalies"]["unreleased_lock_count"], 0)
         self.assertIsNone(summary["recovery_run_id"])
+
+    def test_assign_rejects_when_startup_recovery_blocks_assignments(self) -> None:
+        self.run_cli("setup", "init")
+        orchestration_dir = self.repo_root / ".codex" / "orchestration"
+        state_db = orchestration_dir / "state.db"
+        events_ndjson = orchestration_dir / "events.ndjson"
+
+        seed_event = EventRecord(
+            event_id="evt-worker-seed-hold-001",
+            event_type="worker.seeded",
+            aggregate_type="worker",
+            aggregate_id="worker-codex-hold",
+            timestamp="2026-04-09T21:05:00+01:00",
+            actor_type="controller",
+            actor_id="controller-main",
+            correlation_id="corr-worker-seed-hold-001",
+            causation_id=None,
+            payload={"worker_id": "worker-codex-hold"},
+            redaction_level="none",
+        )
+
+        def mutator(conn):
+            conn.execute(
+                """
+                INSERT INTO workers (
+                    worker_id, runtime_type, adapter_id, tmux_socket, tmux_session, tmux_pane,
+                    state, capabilities, required_signal_status, last_evidence_at,
+                    last_heartbeat_at, interruptibility, operator_tags
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "worker-codex-hold",
+                    "codex",
+                    "codex",
+                    "/tmp/hold.sock",
+                    "hold",
+                    "%1",
+                    "ready",
+                    '["implementation"]',
+                    "required_only",
+                    self.iso_now(seconds_ago=5),
+                    self.iso_now(seconds_ago=5),
+                    "interruptible",
+                    '["registered"]',
+                ),
+            )
+
+        write_eventful_transaction(state_db, events_ndjson, seed_event, mutator)
+
+        task_id = json.loads(
+            self.run_cli(
+                "task",
+                "create",
+                "--summary",
+                "Blocked until startup recovery clears",
+                "--workflow-class",
+                "implementation",
+                "--require-capability",
+                "implementation",
+                "--surface",
+                "backend/recovery_gate.py",
+                "--json",
+            ).stdout
+        )["data"]["task"]["task_id"]
+
+        conn = sqlite3.connect(state_db)
+        try:
+            conn.execute(
+                """
+                INSERT INTO metadata(key, value) VALUES(?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                ("assignments_blocked", "1"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        assign_result = self.run_cli("task", "assign", "--task", task_id, "--json")
+        self.assertEqual(assign_result.returncode, 1)
+        payload = json.loads(assign_result.stdout)
+        self.assertEqual(
+            payload["error"]["message"],
+            "Assignments are blocked pending startup recovery reconciliation",
+        )
+
+        inspect_payload = json.loads(self.run_cli("task", "inspect", "--task", task_id, "--json").stdout)
+        self.assertEqual(inspect_payload["data"]["task"]["state"], "pending_assignment")
+        self.assertIsNone(inspect_payload["data"]["task"]["current_lease_id"])
+
+    def test_restart_summary_flags_pending_accept_leases_for_reconciliation(self) -> None:
+        self.run_cli("setup", "init")
+        orchestration_dir = self.repo_root / ".codex" / "orchestration"
+        state_db = orchestration_dir / "state.db"
+        events_ndjson = orchestration_dir / "events.ndjson"
+
+        create_task(
+            state_db,
+            events_ndjson,
+            TaskRecord(
+                task_id="task-pending-accept",
+                title="Recover half-assigned task",
+                description="Recover half-assigned task",
+                workflow_class="implementation",
+                intent="test",
+                required_capabilities=[],
+                protected_surfaces=["backend/half_assigned.py"],
+                priority="normal",
+                state="reserved",
+                current_worker_id="worker-codex-pending",
+                current_lease_id="lease-pending-accept",
+                routing_policy_ref="phase1-defaults-v1",
+            ),
+            EventRecord(
+                event_id="evt-task-pending-accept",
+                event_type="task.created",
+                aggregate_type="task",
+                aggregate_id="task-pending-accept",
+                timestamp="2026-04-09T21:07:00+01:00",
+                actor_type="controller",
+                actor_id="controller-main",
+                correlation_id="corr-task-pending-accept",
+                causation_id=None,
+                payload={"task_id": "task-pending-accept"},
+                redaction_level="none",
+            ),
+        )
+        write_eventful_transaction(
+            state_db,
+            events_ndjson,
+            EventRecord(
+                event_id="evt-lease-pending-accept",
+                event_type="lease.issued",
+                aggregate_type="lease",
+                aggregate_id="lease-pending-accept",
+                timestamp="2026-04-09T21:07:10+01:00",
+                actor_type="controller",
+                actor_id="controller-main",
+                correlation_id="corr-lease-pending-accept",
+                causation_id=None,
+                payload={"task_id": "task-pending-accept"},
+                redaction_level="none",
+            ),
+            lambda conn: (
+                conn.execute(
+                    """
+                    INSERT INTO leases (
+                        lease_id, task_id, worker_id, state, issued_at, accepted_at,
+                        ended_at, replacement_lease_id, intervention_reason, evidence_version
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "lease-pending-accept",
+                        "task-pending-accept",
+                        "worker-codex-pending",
+                        "pending_accept",
+                        "2026-04-09T21:07:10+01:00",
+                        None,
+                        None,
+                        None,
+                        None,
+                        "route-pending",
+                    ),
+                ),
+                conn.execute(
+                    """
+                    UPDATE tasks
+                    SET current_worker_id = ?, current_lease_id = ?
+                    WHERE task_id = ?
+                    """,
+                    ("worker-codex-pending", "lease-pending-accept", "task-pending-accept"),
+                ),
+            ),
+        )
+
+        conn = sqlite3.connect(state_db)
+        try:
+            conn.execute(
+                """
+                INSERT INTO locks (
+                    lock_id, target_type, target_ref, mode, state, task_id, lease_id,
+                    policy_origin, created_at, released_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "lock-pending-accept",
+                    "path",
+                    "backend/half_assigned.py",
+                    "exclusive",
+                    "held",
+                    "task-pending-accept",
+                    "lease-pending-accept",
+                    "phase1-defaults-v1",
+                    "2026-04-09T21:07:11+01:00",
+                    None,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = self.run_cli("setup", "init", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        summary = payload["data"]["startup_summary"]
+
+        self.assertTrue(summary["assignments_blocked"])
+        self.assertEqual(summary["unresolved_anomalies"]["tasks_pending_reconciliation"], ["task-pending-accept"])
+        self.assertEqual(summary["unresolved_anomalies"]["live_leases_pending_reconciliation"], ["lease-pending-accept"])
+        self.assertEqual(summary["unresolved_anomalies"]["suspended_lease_ids"], [])
+        self.assertEqual(summary["unresolved_anomalies"]["unreleased_lock_count"], 1)
+
+        conn = sqlite3.connect(state_db)
+        try:
+            task_row = conn.execute(
+                "SELECT state, current_worker_id, current_lease_id FROM tasks WHERE task_id = ?",
+                ("task-pending-accept",),
+            ).fetchone()
+            lease_row = conn.execute(
+                "SELECT state FROM leases WHERE lease_id = ?",
+                ("lease-pending-accept",),
+            ).fetchone()
+            metadata = dict(conn.execute("SELECT key, value FROM metadata").fetchall())
+        finally:
+            conn.close()
+
+        self.assertEqual(task_row, ("reconciliation", "worker-codex-pending", "lease-pending-accept"))
+        self.assertEqual(lease_row, ("pending_accept",))
+        self.assertEqual(metadata["assignments_blocked"], "1")
 
     def test_worker_discover_records_tmux_backed_workers(self) -> None:
         if shutil.which("tmux") is None:
@@ -1245,6 +1484,68 @@ class SetupInitTests(unittest.TestCase):
         inspect_payload = json.loads(inspect_result.stdout)
         self.assertEqual(inspect_payload["data"]["worker"]["adapter_id"], "local")
         self.assertEqual(inspect_payload["data"]["worker"]["state"], "ready")
+
+    def test_manual_disable_survives_health_reclassification_reads(self) -> None:
+        self.run_cli("setup", "init")
+        orchestration_dir = self.repo_root / ".codex" / "orchestration"
+        state_db = orchestration_dir / "state.db"
+        events_ndjson = orchestration_dir / "events.ndjson"
+
+        event = EventRecord(
+            event_id="evt-worker-seed-manual-disable-001",
+            event_type="worker.seeded",
+            aggregate_type="worker",
+            aggregate_id="worker-local-disabled",
+            timestamp="2026-04-09T21:42:00+01:00",
+            actor_type="controller",
+            actor_id="controller-main",
+            correlation_id="corr-worker-seed-manual-disable-001",
+            causation_id=None,
+            payload={"worker_id": "worker-local-disabled"},
+            redaction_level="none",
+        )
+
+        def mutator(conn):
+            conn.execute(
+                """
+                INSERT INTO workers (
+                    worker_id, runtime_type, adapter_id, tmux_socket, tmux_session, tmux_pane,
+                    state, capabilities, required_signal_status, last_evidence_at,
+                    last_heartbeat_at, interruptibility, operator_tags
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "worker-local-disabled",
+                    "local",
+                    "local",
+                    "/tmp/manual-disable.sock",
+                    "manual-disable",
+                    "%2",
+                    "unavailable",
+                    '["privacy_sensitive"]',
+                    "required_only",
+                    self.iso_now(seconds_ago=5),
+                    self.iso_now(seconds_ago=5),
+                    "interruptible",
+                    '["registered","manual_disabled"]',
+                ),
+            )
+
+        write_eventful_transaction(state_db, events_ndjson, event, mutator)
+
+        inspect_result = self.run_cli("worker", "inspect", "--worker", "worker-local-disabled", "--json")
+        self.assertEqual(inspect_result.returncode, 0, inspect_result.stderr)
+        inspect_payload = json.loads(inspect_result.stdout)
+        self.assertEqual(inspect_payload["data"]["worker"]["state"], "unavailable")
+        self.assertIn("manual_disabled", inspect_payload["data"]["worker"]["operator_tags"])
+
+        overview_result = self.run_cli("overview", "show", "--json")
+        self.assertEqual(overview_result.returncode, 0, overview_result.stderr)
+
+        list_payload = json.loads(self.run_cli("worker", "list", "--json").stdout)
+        worker = next(item for item in list_payload["data"]["workers"] if item["worker_id"] == "worker-local-disabled")
+        self.assertEqual(worker["state"], "unavailable")
+        self.assertIn("manual_disabled", worker["operator_tags"])
 
     def test_adapter_list_inspect_and_validate(self) -> None:
         list_result = self.run_cli("adapter", "list", "--json")
@@ -1395,6 +1696,29 @@ class SetupInitTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
+
+    def test_codex_adapter_probe_does_not_consume_adjacent_text_after_model_flag(self) -> None:
+        adapter = CodexAdapter()
+        worker = {
+            "worker_id": "worker-codex-regex",
+            "tmux_socket": "/tmp/codex-regex.sock",
+            "tmux_session": "regex",
+            "tmux_pane": "%3",
+            "state": "ready",
+            "capabilities": ["implementation"],
+            "required_signal_status": "required_only",
+            "interruptibility": "interruptible",
+            "freshness_seconds": 5,
+        }
+
+        with mock.patch.object(
+            adapter,
+            "capture",
+            return_value={"ok": True, "adapter_id": "codex", "worker_id": "worker-codex-regex", "output": "codex --model gpt-5.4\nWelcome\n"},
+        ):
+            permission_surface = adapter.probe(worker)[-1]
+
+        self.assertEqual(permission_surface["value"]["model"], "gpt-5.4")
 
     def test_claude_gemini_and_local_adapters_degrade_safely(self) -> None:
         self.run_cli("setup", "init")
@@ -1558,8 +1882,8 @@ class SetupInitTests(unittest.TestCase):
                         state,
                         capabilities,
                         "required_only",
-                        "2026-04-09T21:20:00+00:00",
-                        "2026-04-09T21:20:00+00:00",
+                        self.iso_now(seconds_ago=5),
+                        self.iso_now(seconds_ago=5),
                         interruptibility,
                         '["registered"]',
                     ),
@@ -1649,8 +1973,8 @@ class SetupInitTests(unittest.TestCase):
                     "ready",
                     '["implementation"]',
                     "required_only",
-                    "2026-04-09T21:25:00+00:00",
-                    "2026-04-09T21:25:00+00:00",
+                    self.iso_now(seconds_ago=5),
+                    self.iso_now(seconds_ago=5),
                     "interruptible",
                     '["registered"]',
                 ),
@@ -1696,6 +2020,79 @@ class SetupInitTests(unittest.TestCase):
         self.assertEqual(second_assign.returncode, 1)
         self.assertIn("conflicting_lock_id", second_assign.stdout + second_assign.stderr)
 
+    def test_task_assign_rejects_stale_workers_without_prior_health_refresh(self) -> None:
+        self.run_cli("setup", "init")
+        orchestration_dir = self.repo_root / ".codex" / "orchestration"
+        state_db = orchestration_dir / "state.db"
+        events_ndjson = orchestration_dir / "events.ndjson"
+
+        seed_event = EventRecord(
+            event_id="evt-worker-seed-stale-routing-001",
+            event_type="worker.seeded",
+            aggregate_type="worker",
+            aggregate_id="worker-codex-stale",
+            timestamp="2026-04-09T22:27:00+01:00",
+            actor_type="controller",
+            actor_id="controller-main",
+            correlation_id="corr-worker-seed-stale-routing-001",
+            causation_id=None,
+            payload={"worker_id": "worker-codex-stale"},
+            redaction_level="none",
+        )
+
+        def mutator(conn):
+            conn.execute(
+                """
+                INSERT INTO workers (
+                    worker_id, runtime_type, adapter_id, tmux_socket, tmux_session, tmux_pane,
+                    state, capabilities, required_signal_status, last_evidence_at,
+                    last_heartbeat_at, interruptibility, operator_tags
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "worker-codex-stale",
+                    "codex",
+                    "codex",
+                    "/tmp/stale.sock",
+                    "stale",
+                    "%4",
+                    "ready",
+                    '["implementation"]',
+                    "required_only",
+                    self.iso_now(seconds_ago=120),
+                    self.iso_now(seconds_ago=120),
+                    "interruptible",
+                    '["registered"]',
+                ),
+            )
+
+        write_eventful_transaction(state_db, events_ndjson, seed_event, mutator)
+
+        task_id = json.loads(
+            self.run_cli(
+                "task",
+                "create",
+                "--summary",
+                "Reject stale route target",
+                "--workflow-class",
+                "implementation",
+                "--require-capability",
+                "implementation",
+                "--surface",
+                "backend/stale_routing.py",
+                "--json",
+            ).stdout
+        )["data"]["task"]["task_id"]
+
+        assign_result = self.run_cli("task", "assign", "--task", task_id, "--json")
+        self.assertEqual(assign_result.returncode, 1)
+        payload = json.loads(assign_result.stdout)
+        self.assertEqual(payload["error"]["message"], "No eligible workers for task")
+
+        inspect_payload = json.loads(self.run_cli("task", "inspect", "--task", task_id, "--json").stdout)
+        self.assertEqual(inspect_payload["data"]["task"]["state"], "pending_assignment")
+        self.assertIsNone(inspect_payload["data"]["task"]["current_worker_id"])
+
     def test_privacy_sensitive_routing_prefers_local_only(self) -> None:
         self.run_cli("setup", "init")
         orchestration_dir = self.repo_root / ".codex" / "orchestration"
@@ -1740,8 +2137,8 @@ class SetupInitTests(unittest.TestCase):
                         "ready",
                         capabilities,
                         "required_only",
-                        "2026-04-09T21:30:00+00:00",
-                        "2026-04-09T21:30:00+00:00",
+                        self.iso_now(seconds_ago=5),
+                        self.iso_now(seconds_ago=5),
                         "interruptible",
                         '["registered"]',
                     ),
@@ -1768,6 +2165,76 @@ class SetupInitTests(unittest.TestCase):
         self.assertEqual(assign_result.returncode, 0, assign_result.stderr)
         assign_payload = json.loads(assign_result.stdout)
         self.assertEqual(assign_payload["data"]["result"]["selected_worker_id"], "worker-local-privacy")
+
+    def test_task_assign_reports_unknown_workflow_class_without_traceback(self) -> None:
+        self.run_cli("setup", "init")
+        orchestration_dir = self.repo_root / ".codex" / "orchestration"
+        state_db = orchestration_dir / "state.db"
+        events_ndjson = orchestration_dir / "events.ndjson"
+
+        seed_event = EventRecord(
+            event_id="evt-worker-seed-unknown-workflow-001",
+            event_type="worker.seeded",
+            aggregate_type="worker",
+            aggregate_id="worker-codex-unknown-workflow",
+            timestamp="2026-04-09T22:31:00+01:00",
+            actor_type="controller",
+            actor_id="controller-main",
+            correlation_id="corr-worker-seed-unknown-workflow-001",
+            causation_id=None,
+            payload={"worker_id": "worker-codex-unknown-workflow"},
+            redaction_level="none",
+        )
+
+        def mutator(conn):
+            conn.execute(
+                """
+                INSERT INTO workers (
+                    worker_id, runtime_type, adapter_id, tmux_socket, tmux_session, tmux_pane,
+                    state, capabilities, required_signal_status, last_evidence_at,
+                    last_heartbeat_at, interruptibility, operator_tags
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "worker-codex-unknown-workflow",
+                    "codex",
+                    "codex",
+                    "/tmp/unknown-workflow.sock",
+                    "unknown-workflow",
+                    "%5",
+                    "ready",
+                    '["implementation"]',
+                    "required_only",
+                    self.iso_now(seconds_ago=5),
+                    self.iso_now(seconds_ago=5),
+                    "interruptible",
+                    '["registered"]',
+                ),
+            )
+
+        write_eventful_transaction(state_db, events_ndjson, seed_event, mutator)
+
+        task_id = json.loads(
+            self.run_cli(
+                "task",
+                "create",
+                "--summary",
+                "Unknown workflow class",
+                "--workflow-class",
+                "implementaiton",
+                "--require-capability",
+                "implementation",
+                "--surface",
+                "backend/typo.py",
+                "--json",
+            ).stdout
+        )["data"]["task"]["task_id"]
+
+        assign_result = self.run_cli("task", "assign", "--task", task_id, "--json")
+        self.assertEqual(assign_result.returncode, 1)
+        payload = json.loads(assign_result.stdout)
+        self.assertEqual(payload["error"]["message"], "Unsupported workflow class: implementaiton")
+        self.assertNotIn("Traceback", assign_result.stderr)
 
     def test_lease_and_event_inspection_surface_assignment_history(self) -> None:
         self.run_cli("setup", "init")
@@ -1808,8 +2275,8 @@ class SetupInitTests(unittest.TestCase):
                     "ready",
                     '["implementation"]',
                     "required_only",
-                    "2026-04-09T21:35:00+00:00",
-                    "2026-04-09T21:35:00+00:00",
+                    self.iso_now(seconds_ago=5),
+                    self.iso_now(seconds_ago=5),
                     "interruptible",
                     '["registered"]',
                 ),

@@ -31,8 +31,8 @@ class CodexAdapter(BaseTmuxAdapter):
         confidence = "low"
         if "codex" in capture:
             permission_value["approval_policy"] = "yolo" if "--yolo" in capture else "guarded"
-            sandbox_match = re.search(r"--sandbox(?:\s|=)+([A-Za-z0-9._-]+)", capture)
-            model_match = re.search(r"--model(?:\s|=)+([A-Za-z0-9._-]+)", capture)
+            sandbox_match = re.search(r"--sandbox(?:\s|=)+([a-z0-9._-]+)", capture)
+            model_match = re.search(r"--model(?:\s|=)+([a-z0-9._-]+)", capture)
             if sandbox_match:
                 permission_value["sandbox"] = sandbox_match.group(1)
             if model_match:
