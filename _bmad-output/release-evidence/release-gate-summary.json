@@ -1,0 +1,252 @@
+{
+  "criteria": {
+    "adapter_qualification": {
+      "adapters": [
+        {
+          "adapter_id": "codex",
+          "declared_status": "reference",
+          "first_class_eligible": true,
+          "outcome": "PASS",
+          "release_gate_candidate": true,
+          "report_path": "/home/codexuser/macs_dev/_bmad-output/release-evidence/adapter-qualification/codex-qualification-report.md",
+          "shared_contract_passed": true,
+          "unsupported_features": [
+            "token_budget",
+            "structured_progress",
+            "checkpoint_hints"
+          ]
+        },
+        {
+          "adapter_id": "claude",
+          "declared_status": "provisional",
+          "first_class_eligible": true,
+          "outcome": "PASS",
+          "release_gate_candidate": true,
+          "report_path": "/home/codexuser/macs_dev/_bmad-output/release-evidence/adapter-qualification/claude-qualification-report.md",
+          "shared_contract_passed": true,
+          "unsupported_features": [
+            "token_budget",
+            "structured_progress"
+          ]
+        },
+        {
+          "adapter_id": "gemini",
+          "declared_status": "provisional",
+          "first_class_eligible": true,
+          "outcome": "PASS",
+          "release_gate_candidate": true,
+          "report_path": "/home/codexuser/macs_dev/_bmad-output/release-evidence/adapter-qualification/gemini-qualification-report.md",
+          "shared_contract_passed": true,
+          "unsupported_features": [
+            "token_budget",
+            "runtime_checkpoints"
+          ]
+        },
+        {
+          "adapter_id": "local",
+          "declared_status": "provisional",
+          "first_class_eligible": true,
+          "outcome": "PASS",
+          "release_gate_candidate": true,
+          "report_path": "/home/codexuser/macs_dev/_bmad-output/release-evidence/adapter-qualification/local-qualification-report.md",
+          "shared_contract_passed": true,
+          "unsupported_features": [
+            "token_budget",
+            "structured_progress",
+            "delivery_metadata"
+          ]
+        }
+      ],
+      "outcome": "PASS",
+      "report_paths": {
+        "claude": "/home/codexuser/macs_dev/_bmad-output/release-evidence/adapter-qualification/claude-qualification-report.md",
+        "codex": "/home/codexuser/macs_dev/_bmad-output/release-evidence/adapter-qualification/codex-qualification-report.md",
+        "gemini": "/home/codexuser/macs_dev/_bmad-output/release-evidence/adapter-qualification/gemini-qualification-report.md",
+        "local": "/home/codexuser/macs_dev/_bmad-output/release-evidence/adapter-qualification/local-qualification-report.md"
+      },
+      "suite_command": "python3 -m unittest tools.orchestration.tests.test_adapter_contracts",
+      "suite_returncode": 0,
+      "suite_stderr_tail": [
+        "....",
+        "----------------------------------------------------------------------",
+        "Ran 4 tests in 0.001s",
+        "OK"
+      ],
+      "suite_stdout_tail": []
+    },
+    "failure_mode_matrix": {
+      "failure_classes": [
+        {
+          "failure_class": "worker_disconnect",
+          "outcome": "PASS"
+        },
+        {
+          "failure_class": "stale_lease_divergence",
+          "outcome": "PASS"
+        },
+        {
+          "failure_class": "duplicate_claim",
+          "outcome": "PASS"
+        },
+        {
+          "failure_class": "split_brain_startup_recovery",
+          "outcome": "PASS"
+        },
+        {
+          "failure_class": "lock_collision",
+          "outcome": "PASS"
+        },
+        {
+          "failure_class": "misleading_health_evidence",
+          "outcome": "PASS"
+        },
+        {
+          "failure_class": "surfaced_budget_exhaustion",
+          "outcome": "PASS"
+        },
+        {
+          "failure_class": "interrupted_recovery",
+          "outcome": "PASS"
+        }
+      ],
+      "mandatory_failure_classes": [
+        "worker_disconnect",
+        "stale_lease_divergence",
+        "duplicate_claim",
+        "split_brain_startup_recovery",
+        "lock_collision",
+        "misleading_health_evidence",
+        "surfaced_budget_exhaustion",
+        "interrupted_recovery"
+      ],
+      "outcome": "PASS",
+      "report_path": "/home/codexuser/macs_dev/_bmad-output/release-evidence/failure-mode-matrix-report.md",
+      "suite_command": "python3 -m unittest tools.orchestration.tests.test_failure_drills_cli",
+      "suite_returncode": 0,
+      "suite_stderr_tail": [
+        "........",
+        "----------------------------------------------------------------------",
+        "Ran 8 tests in 3.140s",
+        "OK"
+      ],
+      "suite_stdout_tail": []
+    },
+    "reference_dogfood": {
+      "artifacts_dir": "/home/codexuser/macs_dev/_bmad-output/release-evidence/four-worker-dogfood-artifacts",
+      "next_action": null,
+      "outcome": "PASS",
+      "report_path": "/home/codexuser/macs_dev/_bmad-output/release-evidence/four-worker-dogfood-report.md",
+      "timing_envelope": {
+        "degraded_warning_visibility": {
+          "actual_seconds": 0.06421,
+          "result": "PASS",
+          "target_seconds": 10.0
+        },
+        "task_assignment_path": {
+          "actual_seconds": 0.107042,
+          "result": "PASS",
+          "target_seconds": 5.0
+        },
+        "worker_discovery_or_inspection": {
+          "actual_seconds": 0.072155,
+          "result": "PASS",
+          "target_seconds": 2.0
+        }
+      },
+      "worker_lineup": [
+        {
+          "adapter_version": "phase1-contract",
+          "initial_readiness": "ready",
+          "interruptibility": "interruptible",
+          "notes": "controller and adapter evidence available",
+          "runtime": "codex",
+          "worker": "worker-codex-macs-dogfood-00b72f9b-0"
+        },
+        {
+          "adapter_version": "phase1-contract",
+          "initial_readiness": "ready",
+          "interruptibility": "interruptible",
+          "notes": "controller and adapter evidence available",
+          "runtime": "claude",
+          "worker": "worker-claude-macs-dogfood-00b72f9b-1"
+        },
+        {
+          "adapter_version": "phase1-contract",
+          "initial_readiness": "ready",
+          "interruptibility": "interruptible",
+          "notes": "controller and adapter evidence available",
+          "runtime": "gemini",
+          "worker": "worker-gemini-macs-dogfood-00b72f9b-2"
+        },
+        {
+          "adapter_version": "phase1-contract",
+          "initial_readiness": "ready",
+          "interruptibility": "interruptible",
+          "notes": "controller and adapter evidence available",
+          "runtime": "local",
+          "worker": "worker-local-macs-dogfood-00b72f9b-3"
+        }
+      ]
+    },
+    "restart_recovery": {
+      "outcome": "PASS",
+      "report_path": "/home/codexuser/macs_dev/_bmad-output/release-evidence/restart-recovery-verification-report.md",
+      "scenario_ids": [
+        "tools.orchestration.tests.test_setup_init.SetupInitTests.test_restart_marks_live_ownership_for_reconciliation",
+        "tools.orchestration.tests.test_setup_init.SetupInitTests.test_restart_summary_surfaces_unresolved_task_scoped_recovery_runs",
+        "tools.orchestration.tests.test_setup_init.SetupInitTests.test_assign_rejects_when_startup_recovery_blocks_assignments",
+        "tools.orchestration.tests.test_controller_invariants.ControllerInvariantTests.test_inspect_recovery_context_reports_interrupted_retry_without_live_lease"
+      ],
+      "suite_command": "python3 -m unittest tools.orchestration.tests.test_setup_init.SetupInitTests.test_restart_marks_live_ownership_for_reconciliation tools.orchestration.tests.test_setup_init.SetupInitTests.test_restart_summary_surfaces_unresolved_task_scoped_recovery_runs tools.orchestration.tests.test_setup_init.SetupInitTests.test_assign_rejects_when_startup_recovery_blocks_assignments tools.orchestration.tests.test_controller_invariants.ControllerInvariantTests.test_inspect_recovery_context_reports_interrupted_retry_without_live_lease",
+      "suite_returncode": 0,
+      "suite_stderr_tail": [
+        "....",
+        "----------------------------------------------------------------------",
+        "Ran 4 tests in 0.850s",
+        "OK"
+      ],
+      "suite_stdout_tail": []
+    },
+    "setup_validation": {
+      "gaps": [
+        "enabled adapter 'claude' runtime is not available on PATH",
+        "enabled adapter 'claude' has no registered workers",
+        "enabled adapter 'codex' has no registered workers",
+        "enabled adapter 'gemini' runtime is not available on PATH",
+        "enabled adapter 'gemini' has no registered workers",
+        "enabled adapter 'local' has no registered workers",
+        "no ready workers are currently registered"
+      ],
+      "outcome": "PARTIAL",
+      "report_path": "/home/codexuser/macs_dev/_bmad-output/release-evidence/setup-validation-report.md",
+      "safe_ready_state_reached": false
+    }
+  },
+  "evidence": {
+    "adapter_reports": {
+      "claude": "/home/codexuser/macs_dev/_bmad-output/release-evidence/adapter-qualification/claude-qualification-report.md",
+      "codex": "/home/codexuser/macs_dev/_bmad-output/release-evidence/adapter-qualification/codex-qualification-report.md",
+      "gemini": "/home/codexuser/macs_dev/_bmad-output/release-evidence/adapter-qualification/gemini-qualification-report.md",
+      "local": "/home/codexuser/macs_dev/_bmad-output/release-evidence/adapter-qualification/local-qualification-report.md"
+    },
+    "failure_mode_matrix_report": "/home/codexuser/macs_dev/_bmad-output/release-evidence/failure-mode-matrix-report.md",
+    "four_worker_dogfood_report": "/home/codexuser/macs_dev/_bmad-output/release-evidence/four-worker-dogfood-report.md",
+    "release_gate_report": "/home/codexuser/macs_dev/_bmad-output/release-evidence/release-gate-command-verification.md",
+    "release_gate_summary_json": "/home/codexuser/macs_dev/_bmad-output/release-evidence/release-gate-summary.json",
+    "restart_recovery_report": "/home/codexuser/macs_dev/_bmad-output/release-evidence/restart-recovery-verification-report.md",
+    "setup_validation_report": "/home/codexuser/macs_dev/_bmad-output/release-evidence/setup-validation-report.md"
+  },
+  "generated_at": "2026-04-14T09:49:55+00:00",
+  "invocation": "macs setup validate --release-gate",
+  "next_actions": [
+    "enabled adapter 'claude' runtime is not available on PATH",
+    "enabled adapter 'claude' has no registered workers",
+    "enabled adapter 'codex' has no registered workers",
+    "enabled adapter 'gemini' runtime is not available on PATH",
+    "enabled adapter 'gemini' has no registered workers",
+    "enabled adapter 'local' has no registered workers",
+    "no ready workers are currently registered"
+  ],
+  "operator_id": "codexuser",
+  "outcome": "PARTIAL"
+}

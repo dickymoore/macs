@@ -121,14 +121,35 @@ test -x "$REPO_DIR/.codex/tmux-bridge.sh"
 
 (
   cd "$REPO_DIR"
-  ./.codex/tmux-bridge.sh set_target --pane "$PANE_ID" >/dev/null
+  TMUX_SOCKET="" ./.codex/tmux-bridge.sh set_target --pane "$PANE_ID" >/dev/null
 )
 test -f "$REPO_DIR/.codex/target-pane.txt"
 $RG_CMD -q "^$PANE_ID$" "$REPO_DIR/.codex/target-pane.txt"
 test ! -f "$ROOT_DIR/target_pane.txt"
 
-WRAP_SNAPSHOT="$(cd "$REPO_DIR" && ./.codex/tmux-bridge.sh snapshot --lines 20)"
+WRAP_SNAPSHOT="$(cd "$REPO_DIR" && TMUX_SOCKET="" ./.codex/tmux-bridge.sh snapshot --lines 20)"
 echo "$WRAP_SNAPSHOT" | $RG_CMD -q "tmux-bridge-send"
+
+OTHER_SOCKET="$TMP_DIR/other.sock"
+OTHER_SESSION="${SESSION}-other"
+tmux -S "$OTHER_SOCKET" new-session -d -s "$OTHER_SESSION" -n worker
+OTHER_PANE_ID="$(tmux -S "$OTHER_SOCKET" list-panes -t "$OTHER_SESSION" -F '#{pane_id}' | head -n1)"
+if [ -z "$OTHER_PANE_ID" ]; then
+  echo "Failed to locate tmux pane for other session." >&2
+  exit 1
+fi
+tmux -S "$OTHER_SOCKET" send-keys -t "$OTHER_PANE_ID" "echo tmux-bridge-other-socket" Enter
+printf '%s\n' "$OTHER_SOCKET" > "$REPO_DIR/.codex/tmux-socket.txt"
+WRAP_SNAPSHOT_LIVE_ENV="$(cd "$REPO_DIR" && TMUX_SOCKET="$SOCKET" ./.codex/tmux-bridge.sh snapshot --lines 20)"
+echo "$WRAP_SNAPSHOT_LIVE_ENV" | $RG_CMD -q "tmux-bridge-send"
+if echo "$WRAP_SNAPSHOT_LIVE_ENV" | $RG_CMD -q "tmux-bridge-other-socket"; then
+  echo "Wrapper preferred cached socket over live TMUX_SOCKET." >&2
+  exit 1
+fi
+
+printf 'bogus\n' > "$REPO_DIR/.codex/tmux-socket.txt"
+WRAP_SNAPSHOT_FALLBACK="$(cd "$REPO_DIR" && TMUX_SOCKET="$SOCKET" ./.codex/tmux-bridge.sh snapshot --lines 20)"
+echo "$WRAP_SNAPSHOT_FALLBACK" | $RG_CMD -q "tmux-bridge-send"
 
 cat > "$WORKER_CONFIG" <<EOF
 TMUX_MOUSE=off

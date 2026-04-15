@@ -1,0 +1,483 @@
+{
+  "acceptance": {
+    "artifacts_sufficient": true,
+    "intervention_support_usable": true,
+    "locks_visible": true,
+    "mixed_runtime_orchestration_flow_completed": true,
+    "ownership_visible": true,
+    "routing_rationale_visible": true
+  },
+  "adapter_signals": [
+    {
+      "budget_session_evidence": "permission_surface",
+      "capability_evidence": "capability_decl",
+      "freshness_evidence": "0s",
+      "health_evidence": "ready",
+      "notes": [],
+      "runtime": "codex",
+      "worker": "worker-codex-macs-dogfood-00b72f9b-0"
+    },
+    {
+      "budget_session_evidence": "required_only",
+      "capability_evidence": "capability_decl",
+      "freshness_evidence": "0s",
+      "health_evidence": "ready",
+      "notes": [],
+      "runtime": "claude",
+      "worker": "worker-claude-macs-dogfood-00b72f9b-1"
+    },
+    {
+      "budget_session_evidence": "required_only",
+      "capability_evidence": "capability_decl",
+      "freshness_evidence": "0s",
+      "health_evidence": "ready",
+      "notes": [],
+      "runtime": "gemini",
+      "worker": "worker-gemini-macs-dogfood-00b72f9b-2"
+    },
+    {
+      "budget_session_evidence": "required_only",
+      "capability_evidence": "capability_decl",
+      "freshness_evidence": "0s",
+      "health_evidence": "ready",
+      "notes": [],
+      "runtime": "local",
+      "worker": "worker-local-macs-dogfood-00b72f9b-3"
+    }
+  ],
+  "artifact_inventory": {
+    "event_ids": [
+      "evt-startup-recovery-cd28a8f0fcd5",
+      "evt-lease-activate-1b8a3075b30e",
+      "evt-lease-activate-8a6938d4f36c",
+      "evt-lock-activate-7e7d3ff375c8",
+      "evt-lock-activate-f12431b4ecb6",
+      "evt-lock-reserve-05b1c973bcb1",
+      "evt-lock-reserve-d65183edb1be",
+      "evt-routing-28530080737d",
+      "evt-routing-94053272eca8",
+      "evt-task-activate-0986fd653af6",
+      "evt-task-activate-78e17d210d32",
+      "evt-task-assign-1376940fa34f",
+      "evt-task-assign-18cf617d04fd",
+      "evt-task-create-285304b716a1",
+      "evt-task-create-5a061d8c3f43",
+      "evt-task-create-63a2d1ca8304",
+      "evt-task-create-78b8cf7be5bd",
+      "evt-worker-discover-e66447bc6fa7",
+      "evt-intervention-decision-3783beb53c78",
+      "evt-intervention-decision-3c095473cd9c",
+      "evt-lease-activate-9205e552c76c",
+      "evt-lease-activate-d8fa4dac8af3",
+      "evt-lease-pause-22e0016fc5d7",
+      "evt-lease-resume-ac0587f4b8f9",
+      "evt-lock-activate-07c08904f247",
+      "evt-lock-activate-dd09d2e5e53e",
+      "evt-lock-reserve-d8502d3c80a3",
+      "evt-lock-reserve-fb60da941c44",
+      "evt-routing-35cc17572a67",
+      "evt-routing-6a0443fb07a5",
+      "evt-task-activate-4eecccb2ed85",
+      "evt-task-activate-dcba4c9bd116",
+      "evt-task-assign-5e82b885d401",
+      "evt-task-assign-c2b05c0a7027",
+      "evt-task-pause-4ba4e1c9d20f",
+      "evt-task-resume-66342ff7da0d",
+      "evt-lease-complete-0aeefba78038",
+      "evt-lease-complete-2c11bb796170",
+      "evt-lease-complete-a221cdb4c2d7",
+      "evt-lease-complete-c1ac80e7d3b8",
+      "evt-lock-release-2a796c1423c6",
+      "evt-lock-release-3d5a56b4d7ab",
+      "evt-lock-release-955def408cb5",
+      "evt-lock-release-d008597d1577",
+      "evt-task-complete-05fc018f736a",
+      "evt-task-complete-ab9da5b8a994",
+      "evt-task-complete-cd62d71207ed",
+      "evt-task-complete-dde4f1c33bc0",
+      "evt-worker-health-ed5bc13abd78"
+    ],
+    "human_readable_summaries": [
+      "/home/codexuser/macs_dev/_bmad-output/release-evidence/four-worker-dogfood-report.md"
+    ],
+    "machine_readable_outputs": [
+      "/home/codexuser/macs_dev/_bmad-output/release-evidence/four-worker-dogfood-artifacts/four-worker-dogfood-summary.json",
+      "/home/codexuser/macs_dev/_bmad-output/release-evidence/four-worker-dogfood-artifacts/four-worker-dogfood-pane-captures.json",
+      "/home/codexuser/macs_dev/_bmad-output/release-evidence/four-worker-dogfood-artifacts/four-worker-dogfood-command-log.json"
+    ],
+    "pane_capture_refs": {
+      "claude": "%1",
+      "codex": "%0",
+      "gemini": "%2",
+      "local": "%3"
+    }
+  },
+  "controller_facts": {
+    "event_history_remained_inspectable": true,
+    "lock_state_remained_inspectable": true,
+    "ownership_remained_explicit": true,
+    "zero_or_one_live_lease_held": true
+  },
+  "intervention": {
+    "action": "pause_resume",
+    "decision_event_id": "evt-intervention-decision-3783beb53c78",
+    "resume_event_id": "evt-task-resume-66342ff7da0d",
+    "state_change_event_id": "evt-task-pause-4ba4e1c9d20f",
+    "supported": true,
+    "task_id": "task-311bcaa5fb88"
+  },
+  "lease_details": {
+    "lease-01b22aaa34e2": {
+      "command": "macs lease inspect",
+      "data": {
+        "blocking_condition": null,
+        "decision_event": null,
+        "lease": {
+          "accepted_at": "2026-04-14T09:49:53+00:00",
+          "ended_at": null,
+          "evidence_version": "route-8f2b567c9e55",
+          "intervention_reason": null,
+          "issued_at": "2026-04-14T09:49:53+00:00",
+          "lease_id": "lease-01b22aaa34e2",
+          "replacement_lease_id": null,
+          "state": "active",
+          "task_id": "task-0583b601d12c",
+          "worker_id": "worker-codex-macs-dogfood-00b72f9b-0"
+        },
+        "next_action": null,
+        "recent_event_refs": [
+          {
+            "actor_id": "controller-main",
+            "actor_type": "controller",
+            "affected_refs": {
+              "lease_id": "lease-01b22aaa34e2",
+              "task_id": "task-0583b601d12c",
+              "worker_id": "worker-codex-macs-dogfood-00b72f9b-0"
+            },
+            "aggregate_id": "lease-01b22aaa34e2",
+            "aggregate_type": "lease",
+            "causation_id": "evt-task-assign-18cf617d04fd",
+            "correlation_id": "corr-task-assign-170ef41822b2",
+            "decision_action": null,
+            "decision_event_id": null,
+            "event_id": "evt-lease-activate-8a6938d4f36c",
+            "event_type": "lease.activated",
+            "intervention_rationale": null,
+            "payload_summary": {
+              "lease_id": "lease-01b22aaa34e2",
+              "task_id": "task-0583b601d12c",
+              "worker_id": "worker-codex-macs-dogfood-00b72f9b-0"
+            },
+            "redaction_level": "none",
+            "timestamp": "2026-04-14T09:49:53+00:00"
+          }
+        ]
+      },
+      "error": null,
+      "ok": true
+    },
+    "lease-27bd0bd83800": {
+      "command": "macs lease inspect",
+      "data": {
+        "blocking_condition": null,
+        "decision_event": null,
+        "lease": {
+          "accepted_at": "2026-04-14T09:49:54+00:00",
+          "ended_at": null,
+          "evidence_version": "route-0c74bd9f9c8e",
+          "intervention_reason": null,
+          "issued_at": "2026-04-14T09:49:54+00:00",
+          "lease_id": "lease-27bd0bd83800",
+          "replacement_lease_id": null,
+          "state": "active",
+          "task_id": "task-23250f4a2cae",
+          "worker_id": "worker-local-macs-dogfood-00b72f9b-3"
+        },
+        "next_action": null,
+        "recent_event_refs": [
+          {
+            "actor_id": "controller-main",
+            "actor_type": "controller",
+            "affected_refs": {
+              "lease_id": "lease-27bd0bd83800",
+              "task_id": "task-23250f4a2cae",
+              "worker_id": "worker-local-macs-dogfood-00b72f9b-3"
+            },
+            "aggregate_id": "lease-27bd0bd83800",
+            "aggregate_type": "lease",
+            "causation_id": "evt-task-assign-c2b05c0a7027",
+            "correlation_id": "corr-task-assign-50c791b0e339",
+            "decision_action": null,
+            "decision_event_id": null,
+            "event_id": "evt-lease-activate-9205e552c76c",
+            "event_type": "lease.activated",
+            "intervention_rationale": null,
+            "payload_summary": {
+              "lease_id": "lease-27bd0bd83800",
+              "task_id": "task-23250f4a2cae",
+              "worker_id": "worker-local-macs-dogfood-00b72f9b-3"
+            },
+            "redaction_level": "none",
+            "timestamp": "2026-04-14T09:49:54+00:00"
+          }
+        ]
+      },
+      "error": null,
+      "ok": true
+    },
+    "lease-7c7d24f8435f": {
+      "command": "macs lease inspect",
+      "data": {
+        "blocking_condition": null,
+        "decision_event": null,
+        "lease": {
+          "accepted_at": "2026-04-14T09:49:54+00:00",
+          "ended_at": null,
+          "evidence_version": "route-e797e988b562",
+          "intervention_reason": null,
+          "issued_at": "2026-04-14T09:49:54+00:00",
+          "lease_id": "lease-7c7d24f8435f",
+          "replacement_lease_id": null,
+          "state": "active",
+          "task_id": "task-311bcaa5fb88",
+          "worker_id": "worker-gemini-macs-dogfood-00b72f9b-2"
+        },
+        "next_action": null,
+        "recent_event_refs": [
+          {
+            "actor_id": "controller-main",
+            "actor_type": "controller",
+            "affected_refs": {
+              "lease_id": "lease-7c7d24f8435f",
+              "task_id": "task-311bcaa5fb88",
+              "worker_id": "worker-gemini-macs-dogfood-00b72f9b-2"
+            },
+            "aggregate_id": "lease-7c7d24f8435f",
+            "aggregate_type": "lease",
+            "causation_id": "evt-task-assign-5e82b885d401",
+            "correlation_id": "corr-task-assign-95cb1308e0e2",
+            "decision_action": null,
+            "decision_event_id": null,
+            "event_id": "evt-lease-activate-d8fa4dac8af3",
+            "event_type": "lease.activated",
+            "intervention_rationale": null,
+            "payload_summary": {
+              "lease_id": "lease-7c7d24f8435f",
+              "task_id": "task-311bcaa5fb88",
+              "worker_id": "worker-gemini-macs-dogfood-00b72f9b-2"
+            },
+            "redaction_level": "none",
+            "timestamp": "2026-04-14T09:49:54+00:00"
+          }
+        ]
+      },
+      "error": null,
+      "ok": true
+    },
+    "lease-895e53a0caab": {
+      "command": "macs lease inspect",
+      "data": {
+        "blocking_condition": null,
+        "decision_event": null,
+        "lease": {
+          "accepted_at": "2026-04-14T09:49:53+00:00",
+          "ended_at": null,
+          "evidence_version": "route-badd64e17842",
+          "intervention_reason": null,
+          "issued_at": "2026-04-14T09:49:53+00:00",
+          "lease_id": "lease-895e53a0caab",
+          "replacement_lease_id": null,
+          "state": "active",
+          "task_id": "task-1d08717543a8",
+          "worker_id": "worker-claude-macs-dogfood-00b72f9b-1"
+        },
+        "next_action": null,
+        "recent_event_refs": [
+          {
+            "actor_id": "controller-main",
+            "actor_type": "controller",
+            "affected_refs": {
+              "lease_id": "lease-895e53a0caab",
+              "task_id": "task-1d08717543a8",
+              "worker_id": "worker-claude-macs-dogfood-00b72f9b-1"
+            },
+            "aggregate_id": "lease-895e53a0caab",
+            "aggregate_type": "lease",
+            "causation_id": "evt-task-assign-1376940fa34f",
+            "correlation_id": "corr-task-assign-54e02a0c29e7",
+            "decision_action": null,
+            "decision_event_id": null,
+            "event_id": "evt-lease-activate-1b8a3075b30e",
+            "event_type": "lease.activated",
+            "intervention_rationale": null,
+            "payload_summary": {
+              "lease_id": "lease-895e53a0caab",
+              "task_id": "task-1d08717543a8",
+              "worker_id": "worker-claude-macs-dogfood-00b72f9b-1"
+            },
+            "redaction_level": "none",
+            "timestamp": "2026-04-14T09:49:53+00:00"
+          }
+        ]
+      },
+      "error": null,
+      "ok": true
+    }
+  },
+  "outcome": "PASS",
+  "run_metadata": {
+    "date": "2026-04-14T09:49:55+00:00",
+    "operator": "codexuser",
+    "repository_revision": "aa4f631+dirty",
+    "run_id": "dogfood-release-gate-4c81fa78",
+    "scenario_definition_reference": "tools.orchestration.dogfood:run_reference_dogfood",
+    "work_surface_mode": "isolated_fixture_repo_with_repo_local_state"
+  },
+  "scenario_summary": {
+    "planned_intervention_points": [
+      "pause and resume task-311bcaa5fb88"
+    ],
+    "planned_recovery_or_reroute_points": [],
+    "protected_surfaces_involved": [
+      "src/reference/codex-implementation.txt",
+      "docs/reference/claude-planning.md",
+      "docs/reference/gemini-solutioning.md",
+      "ops/reference/local-private-checklist.md"
+    ],
+    "tasks_created": [
+      "task-0583b601d12c",
+      "task-1d08717543a8",
+      "task-311bcaa5fb88",
+      "task-23250f4a2cae"
+    ],
+    "workflow_classes_exercised": [
+      "implementation",
+      "planning_docs",
+      "solutioning",
+      "privacy_sensitive_offline"
+    ]
+  },
+  "steps": [
+    {
+      "action": "Start controller session",
+      "actual_result": "setup init passed",
+      "expected_result": "repo-local orchestration initialized",
+      "outcome": "PASS",
+      "step": 1
+    },
+    {
+      "action": "Confirm worker roster",
+      "actual_result": "discovered 4 workers",
+      "expected_result": "four runtimes discovered",
+      "outcome": "PASS",
+      "step": 2
+    },
+    {
+      "action": "Assign mixed-runtime tasks",
+      "actual_result": "assigned 4 tasks",
+      "expected_result": "four tasks routed across four runtimes",
+      "outcome": "PASS",
+      "step": 3
+    },
+    {
+      "action": "Inspect ownership and locks",
+      "actual_result": "locks visible=4",
+      "expected_result": "task, lease, and lock visibility preserved",
+      "outcome": "PASS",
+      "step": 4
+    },
+    {
+      "action": "Review routing rationale",
+      "actual_result": "task inspect routing decisions present",
+      "expected_result": "selected worker preserved in task inspection",
+      "outcome": "PASS",
+      "step": 5
+    },
+    {
+      "action": "Exercise intervention",
+      "actual_result": "pause event=evt-task-pause-4ba4e1c9d20f",
+      "expected_result": "pause and resume succeeds with decision trail",
+      "outcome": "PASS",
+      "step": 6
+    },
+    {
+      "action": "Exercise degraded warning visibility",
+      "actual_result": "warning after 0.064s",
+      "expected_result": "controlled warning visible within envelope",
+      "outcome": "PASS",
+      "step": 7
+    },
+    {
+      "action": "Close or archive tasks",
+      "actual_result": "close commands completed",
+      "expected_result": "all reference tasks closed cleanly",
+      "outcome": "PASS",
+      "step": 8
+    }
+  ],
+  "timing_envelope": {
+    "degraded_warning_visibility": {
+      "actual_seconds": 0.06421,
+      "result": "PASS",
+      "target_seconds": 10.0
+    },
+    "task_assignment_path": {
+      "actual_seconds": 0.107042,
+      "result": "PASS",
+      "target_seconds": 5.0
+    },
+    "worker_discovery_or_inspection": {
+      "actual_seconds": 0.072155,
+      "result": "PASS",
+      "target_seconds": 2.0
+    }
+  },
+  "warning_visibility": {
+    "actual_seconds": 0.06421,
+    "note": "Warning timing was proven with controlled stale-evidence injection in repo-local state to keep Story 8.3 bounded and avoid reimplementing the Story 8.2 failure matrix.",
+    "overview_alerts": [
+      {
+        "kind": "worker_state",
+        "state": "degraded",
+        "worker_id": "worker-local-macs-dogfood-00b72f9b-3"
+      }
+    ],
+    "trigger": "controlled_stale_evidence",
+    "warning": "Worker worker-local-macs-dogfood-00b72f9b-3 is degraded; controller truth remains authoritative.",
+    "worker_id": "worker-local-macs-dogfood-00b72f9b-3"
+  },
+  "worker_lineup": [
+    {
+      "adapter_version": "phase1-contract",
+      "initial_readiness": "ready",
+      "interruptibility": "interruptible",
+      "notes": "controller and adapter evidence available",
+      "runtime": "codex",
+      "worker": "worker-codex-macs-dogfood-00b72f9b-0"
+    },
+    {
+      "adapter_version": "phase1-contract",
+      "initial_readiness": "ready",
+      "interruptibility": "interruptible",
+      "notes": "controller and adapter evidence available",
+      "runtime": "claude",
+      "worker": "worker-claude-macs-dogfood-00b72f9b-1"
+    },
+    {
+      "adapter_version": "phase1-contract",
+      "initial_readiness": "ready",
+      "interruptibility": "interruptible",
+      "notes": "controller and adapter evidence available",
+      "runtime": "gemini",
+      "worker": "worker-gemini-macs-dogfood-00b72f9b-2"
+    },
+    {
+      "adapter_version": "phase1-contract",
+      "initial_readiness": "ready",
+      "interruptibility": "interruptible",
+      "notes": "controller and adapter evidence available",
+      "runtime": "local",
+      "worker": "worker-local-macs-dogfood-00b72f9b-3"
+    }
+  ]
+}

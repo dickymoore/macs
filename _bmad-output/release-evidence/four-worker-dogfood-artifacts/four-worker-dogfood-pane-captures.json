@@ -1,0 +1,22 @@
+{
+  "claude": {
+    "output": "printf 'claude runtime reference pane\\n'\ncodexuser@UK-8WS49D4:~/macs_dev$ printf 'claude runtime reference pane\\n'\nclaude runtime reference pane\ncodexuser@UK-8WS49D4:~/macs_dev$ MACS_TASK_ASSIGN {\"lease_id\": \"lease-895e53a0ca\nab\", \"summary\": \"Reference claude planning slice\", \"task_id\": \"task-1d08717543a8\n\", \"worker_id\": \"worker-claude-macs-dogfood-00b72f9b-1\", \"workflow_class\": \"plan\nning_docs\"}\nMACS_TASK_ASSIGN: command not found\ncodexuser@UK-8WS49D4:~/macs_dev$\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
+    "pane_id": "%1",
+    "window_name": "claude"
+  },
+  "codex": {
+    "output": "printf 'codex --sandbox workspace-write --model gpt-5.4\\n'\ncodexuser@UK-8WS49D4:~/macs_dev$ printf 'codex --sandbox workspace-write --model\n gpt-5.4\\n'\ncodex --sandbox workspace-write --model gpt-5.4\ncodexuser@UK-8WS49D4:~/macs_dev$ MACS_TASK_ASSIGN {\"lease_id\": \"lease-01b22aaa34\ne2\", \"summary\": \"Reference codex implementation slice\", \"task_id\": \"task-0583b60\n1d12c\", \"worker_id\": \"worker-codex-macs-dogfood-00b72f9b-0\", \"workflow_class\": \"\nimplementation\"}\nMACS_TASK_ASSIGN: command not found\ncodexuser@UK-8WS49D4:~/macs_dev$\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
+    "pane_id": "%0",
+    "window_name": "codex"
+  },
+  "gemini": {
+    "output": "printf 'gemini runtime reference pane\\n'\ncodexuser@UK-8WS49D4:~/macs_dev$ printf 'gemini runtime reference pane\\n'\ngemini runtime reference pane\ncodexuser@UK-8WS49D4:~/macs_dev$ MACS_TASK_ASSIGN {\"lease_id\": \"lease-7c7d24f843\n5f\", \"summary\": \"Reference gemini solutioning slice\", \"task_id\": \"task-311bcaa5f\nb88\", \"worker_id\": \"worker-gemini-macs-dogfood-00b72f9b-2\", \"workflow_class\": \"s\nolutioning\"}\nMACS_TASK_ASSIGN: command not found\ncodexuser@UK-8WS49D4:~/macs_dev$\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
+    "pane_id": "%2",
+    "window_name": "gemini"
+  },
+  "local": {
+    "output": "printf 'local runtime reference pane\\n'\ncodexuser@UK-8WS49D4:~/macs_dev$ printf 'local runtime reference pane\\n'\nlocal runtime reference pane\ncodexuser@UK-8WS49D4:~/macs_dev$ MACS_TASK_ASSIGN {\"lease_id\": \"lease-27bd0bd838\n00\", \"summary\": \"Reference local privacy slice\", \"task_id\": \"task-23250f4a2cae\",\n \"worker_id\": \"worker-local-macs-dogfood-00b72f9b-3\", \"workflow_class\": \"privacy\n_sensitive_offline\"}\nMACS_TASK_ASSIGN: command not found\ncodexuser@UK-8WS49D4:~/macs_dev$\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
+    "pane_id": "%3",
+    "window_name": "local"
+  }
+}

@@ -132,6 +132,10 @@ if [ "$RUN_CODEX" -eq 1 ]; then
     echo "codex not found in PATH" >&2
     exit 1
   fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 not found in PATH" >&2
+    exit 1
+  fi
 fi
 
 mkdir -p "$TARGET_DIR/.codex/prompts"
@@ -191,13 +195,15 @@ if [ -f "$ROOT_DIR/.codex/tmux-session.txt" ]; then
   SESSION="$(cat "$ROOT_DIR/.codex/tmux-session.txt")"
 fi
 
-if [ -n "${TMUX_SOCKET:-}" ] && [ -S "${TMUX_SOCKET:-}" ]; then
+if [ -n "${TMUX_SOCKET:-}" ] && tmux -S "$TMUX_SOCKET" list-sessions >/dev/null 2>&1; then
   SOCKET="$TMUX_SOCKET"
 elif [ -f "$ROOT_DIR/.codex/tmux-socket.txt" ]; then
   socket_candidate="$(cat "$ROOT_DIR/.codex/tmux-socket.txt")"
-  if [ -n "$socket_candidate" ] && [ -S "$socket_candidate" ]; then
+  if [ -n "$socket_candidate" ] && tmux -S "$socket_candidate" list-sessions >/dev/null 2>&1; then
     SOCKET="$socket_candidate"
   fi
+elif [ -n "${TMUX_SOCKET:-}" ]; then
+  SOCKET="$TMUX_SOCKET"
 fi
 
 TMUX_BRIDGE=""
@@ -521,6 +527,13 @@ if [ "$RUN_CODEX" -eq 1 ]; then
     fi
   fi
   # Ensure controller uses the target repo's local .codex state and loads the controller skill.
-  exec env CODEX_HOME="$PWD/.codex" codex "${CODEX_ARGS[@]}" "\$controller"
+  exec env \
+    CODEX_HOME="$PWD/.codex" \
+    TMUX_SESSION="${TMUX_SESSION:-}" \
+    TMUX_SOCKET="${TMUX_SOCKET:-}" \
+    python3 "$ROOT_DIR/tools/orchestration/cli/main.py" \
+      --repo "$PWD" \
+      setup init \
+      --exec codex "${CODEX_ARGS[@]}" "\$controller"
 fi
 echo "Controller setup complete. Skipping codex launch (--no-codex)."

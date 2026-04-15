@@ -2,6 +2,43 @@
 
 This guide covers how to adapt MACS for your specific project needs.
 
+## Repo-Local Control-Plane Configuration
+
+MACS now keeps the main control-plane configuration domains separate under `.codex/orchestration/`:
+
+- `controller-defaults.json`: controller-owned defaults such as the default workflow class for `macs task create`
+- `adapter-settings.json`: repo-local adapter enablement plus config references or notes per adapter
+- `routing-policy.json`: workflow-class routing defaults
+- `governance-policy.json`: governed surfaces and audit-content policy
+- `state-layout.json`: authoritative control-plane store paths plus compatibility-path references
+
+Inspect the active configuration from the controller surface:
+
+```bash
+./macs setup check
+./macs setup check --json
+```
+
+`state-layout.json` does not replace existing bridge-era compatibility files. `.codex/tmux-session.txt`, `.codex/tmux-socket.txt`, `.codex/target-pane.txt`, and `tools/tmux_bridge/target_pane.txt` remain the compatibility paths MACS reads or preserves for tmux targeting behavior.
+
+## Extending Runtime Adapters
+
+Contributor-facing adapter extension guidance is published separately in [adapter-contributor-guide.md](./adapter-contributor-guide.md).
+
+Use that guide when you need to:
+
+- inspect the shared adapter contract
+- align runtime capability labels with current routing defaults
+- declare degraded behavior and unsupported features explicitly
+- validate contributor changes before treating an adapter as first-class
+
+The live controller surfaces for this work are:
+
+```bash
+./macs adapter inspect --adapter <adapter-id> --json
+./macs adapter validate --adapter <adapter-id> --json
+```
+
 ## Controller Prompt Customization
 
 ### Adding Project-Specific Rules
