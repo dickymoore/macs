@@ -2,7 +2,7 @@
 
 ## 1. Run Metadata
 
-- Report date: 2026-04-10T17:51:12+00:00
+- Report date: 2026-04-14T09:49:52+00:00
 - Owner: qa
 - Outcome: `PASS`
 
@@ -20,7 +20,7 @@
 - Command: `python3 -m unittest tools.orchestration.tests.test_setup_init.SetupInitTests.test_restart_marks_live_ownership_for_reconciliation tools.orchestration.tests.test_setup_init.SetupInitTests.test_restart_summary_surfaces_unresolved_task_scoped_recovery_runs tools.orchestration.tests.test_setup_init.SetupInitTests.test_assign_rejects_when_startup_recovery_blocks_assignments tools.orchestration.tests.test_controller_invariants.ControllerInvariantTests.test_inspect_recovery_context_reports_interrupted_retry_without_live_lease`
 - Return code: 0
 - stdout tail: none
-- stderr tail: ...., ----------------------------------------------------------------------, Ran 4 tests in 0.805s, OK
+- stderr tail: ...., ----------------------------------------------------------------------, Ran 4 tests in 0.850s, OK
 
 ## 4. Sign-Off
 

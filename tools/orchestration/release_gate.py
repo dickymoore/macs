@@ -7,7 +7,9 @@ import json
 import os
 import shlex
 import shutil
+import sqlite3
 import subprocess
+import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,6 +43,20 @@ RESTART_RECOVERY_SUITE = [
     "tools.orchestration.tests.test_setup_init.SetupInitTests.test_restart_summary_surfaces_unresolved_task_scoped_recovery_runs",
     "tools.orchestration.tests.test_setup_init.SetupInitTests.test_assign_rejects_when_startup_recovery_blocks_assignments",
     "tools.orchestration.tests.test_controller_invariants.ControllerInvariantTests.test_inspect_recovery_context_reports_interrupted_retry_without_live_lease",
+]
+
+GOVERNANCE_HARDENING_SUITE = [
+    "python3",
+    "-m",
+    "unittest",
+    "tools.orchestration.tests.test_inspect_context_cli.InspectContextCliContractTests.test_task_inspect_json_surfaces_compact_governance_evidence_without_secret_leakage",
+    "tools.orchestration.tests.test_inspect_context_cli.InspectContextCliContractTests.test_event_inspect_surfaces_governance_evidence_and_decision_linkage_without_secret_leakage",
+    "tools.orchestration.tests.test_inspect_context_cli.InspectContextCliContractTests.test_task_inspect_surfaces_version_pin_rejection_governance_evidence",
+    "tools.orchestration.tests.test_task_lifecycle_cli.TaskLifecycleCliContractTests.test_task_assign_rejects_stale_surface_version_evidence_and_preserves_routing_context",
+    "tools.orchestration.tests.test_task_lifecycle_cli.TaskLifecycleCliContractTests.test_task_assign_rejects_unresolved_secret_ref_before_assignment_and_lease_reservation",
+    "tools.orchestration.tests.test_task_lifecycle_cli.TaskLifecycleCliContractTests.test_task_archive_blocks_without_checkpoint_and_leaves_state_unchanged",
+    "tools.orchestration.tests.test_task_lifecycle_cli.TaskLifecycleCliContractTests.test_task_close_blocks_with_stale_checkpoint_after_repo_changes",
+    "tools.orchestration.tests.test_task_lifecycle_cli.TaskLifecycleCliContractTests.test_task_archive_blocks_when_only_close_checkpoint_exists",
 ]
 
 MANDATORY_FAILURE_CLASSES = [
@@ -98,6 +114,16 @@ def run_release_gate(repo_root: Path, paths) -> dict[str, object]:
         operator_id=operator_id,
     )
 
+    governance_report_path = evidence_root / "governance-hardening-report.md"
+    governance_summary_path = evidence_root / "governance-hardening-summary.json"
+    governance_artifacts_dir = evidence_root / "governance-hardening-artifacts"
+    governance_criterion = build_governance_hardening(
+        report_path=governance_report_path,
+        summary_path=governance_summary_path,
+        artifacts_dir=governance_artifacts_dir,
+        operator_id=operator_id,
+    )
+
     criteria = {
         "setup_validation": {
             "outcome": str(validation["outcome"]),
@@ -108,6 +134,7 @@ def run_release_gate(repo_root: Path, paths) -> dict[str, object]:
         "adapter_qualification": adapter_criterion,
         "failure_mode_matrix": failure_criterion,
         "restart_recovery": restart_criterion,
+        "governance_hardening": governance_criterion,
         "reference_dogfood": dogfood_criterion,
     }
 
@@ -117,6 +144,8 @@ def run_release_gate(repo_root: Path, paths) -> dict[str, object]:
         "failure_mode_matrix_report": str(failure_report_path),
         "restart_recovery_report": str(restart_report_path),
         "four_worker_dogfood_report": str(dogfood_report_path),
+        "governance_hardening_report": str(governance_report_path),
+        "governance_hardening_summary_json": str(governance_summary_path),
         "release_gate_report": str(evidence_root / "release-gate-command-verification.md"),
         "release_gate_summary_json": str(evidence_root / "release-gate-summary.json"),
     }
@@ -290,6 +319,430 @@ def build_reference_dogfood(
     }
 
 
+def build_governance_hardening(
+    *,
+    report_path: Path,
+    summary_path: Path,
+    artifacts_dir: Path,
+    operator_id: str,
+) -> dict[str, object]:
+    suite_result = run_subprocess(GOVERNANCE_HARDENING_SUITE)
+    suite_outcome = "PASS" if suite_result["returncode"] == 0 else "FAIL"
+    sample = build_governance_hardening_sample(artifacts_dir, operator_id=operator_id)
+    controls = build_governance_hardening_controls(suite_outcome=suite_outcome, sample=sample)
+    outcome = summarize_outcomes([suite_outcome, str(sample["outcome"]), *(control["outcome"] for control in controls)])
+    summary_payload = {
+        "outcome": outcome,
+        "suite_command": suite_result["command"],
+        "suite_returncode": suite_result["returncode"],
+        "suite_stdout_tail": suite_result["stdout_tail"],
+        "suite_stderr_tail": suite_result["stderr_tail"],
+        "controls": controls,
+        "coverage": governance_hardening_coverage(),
+        "sample_evidence": {
+            **dict(sample.get("sample_evidence", {})),
+            "summary_path": str(summary_path),
+        },
+    }
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(json.dumps(summary_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_governance_hardening_report(report_path, summary_payload)
+    return {
+        "outcome": outcome,
+        "suite_command": suite_result["command"],
+        "suite_returncode": suite_result["returncode"],
+        "suite_stdout_tail": suite_result["stdout_tail"],
+        "suite_stderr_tail": suite_result["stderr_tail"],
+        "controls": controls,
+        "coverage": governance_hardening_coverage(),
+        "sample_evidence": summary_payload["sample_evidence"],
+        "report_path": str(report_path),
+    }
+
+
+def governance_hardening_coverage() -> list[dict[str, object]]:
+    return [
+        {
+            "control_id": "version_pin",
+            "scenario_id": "version_pin_drift",
+            "source": "tools.orchestration.tests.test_inspect_context_cli.InspectContextCliContractTests.test_task_inspect_surfaces_version_pin_rejection_governance_evidence",
+        },
+        {
+            "control_id": "version_pin",
+            "scenario_id": "version_pin_stale",
+            "source": "tools.orchestration.tests.test_task_lifecycle_cli.TaskLifecycleCliContractTests.test_task_assign_rejects_stale_surface_version_evidence_and_preserves_routing_context",
+        },
+        {
+            "control_id": "secret_scope",
+            "scenario_id": "secret_ref_unresolved",
+            "source": "tools.orchestration.tests.test_task_lifecycle_cli.TaskLifecycleCliContractTests.test_task_assign_rejects_unresolved_secret_ref_before_assignment_and_lease_reservation",
+        },
+        {
+            "control_id": "secret_scope",
+            "scenario_id": "resolved_secret_scope",
+            "source": "tools.orchestration.tests.test_inspect_context_cli.InspectContextCliContractTests.test_task_inspect_json_surfaces_compact_governance_evidence_without_secret_leakage",
+        },
+        {
+            "control_id": "checkpoint_gate",
+            "scenario_id": "missing_checkpoint",
+            "source": "tools.orchestration.tests.test_task_lifecycle_cli.TaskLifecycleCliContractTests.test_task_archive_blocks_without_checkpoint_and_leaves_state_unchanged",
+        },
+        {
+            "control_id": "checkpoint_gate",
+            "scenario_id": "stale_checkpoint",
+            "source": "tools.orchestration.tests.test_task_lifecycle_cli.TaskLifecycleCliContractTests.test_task_close_blocks_with_stale_checkpoint_after_repo_changes",
+        },
+        {
+            "control_id": "checkpoint_gate",
+            "scenario_id": "mismatched_checkpoint",
+            "source": "tools.orchestration.tests.test_task_lifecycle_cli.TaskLifecycleCliContractTests.test_task_archive_blocks_when_only_close_checkpoint_exists",
+        },
+    ]
+
+
+def build_governance_hardening_controls(
+    *,
+    suite_outcome: str,
+    sample: dict[str, object],
+) -> list[dict[str, object]]:
+    sample_evidence = dict(sample.get("sample_evidence", {}))
+    sample_blocked = sample.get("outcome") == "BLOCKED"
+    sample_failed = sample.get("outcome") == "FAIL"
+
+    def control_outcome(expected: bool) -> str:
+        if sample_blocked:
+            return "BLOCKED"
+        if suite_outcome != "PASS" or sample_failed or not expected:
+            return "FAIL"
+        return "PASS"
+
+    version_pin = sample_evidence.get("version_pin") or {}
+    secret_scope = sample_evidence.get("secret_scope") or {}
+    checkpoint_gate = sample_evidence.get("checkpoint_gate") or {}
+    return [
+        {
+            "control_id": "version_pin",
+            "outcome": control_outcome(version_pin.get("outcome") == "matched"),
+            "evidence_ref": sample_evidence.get("task_inspect_path"),
+        },
+        {
+            "control_id": "secret_scope",
+            "outcome": control_outcome(secret_scope.get("outcome") == "resolved"),
+            "evidence_ref": sample_evidence.get("task_inspect_path"),
+        },
+        {
+            "control_id": "checkpoint_gate",
+            "outcome": control_outcome(checkpoint_gate.get("decision_linkage") == "present"),
+            "evidence_ref": sample_evidence.get("event_inspect_path"),
+        },
+    ]
+
+
+def build_governance_hardening_sample(artifacts_dir: Path, *, operator_id: str) -> dict[str, object]:
+    if shutil.which("tmux") is None:
+        return {"outcome": "BLOCKED", "sample_evidence": {}, "error": "tmux is not available on PATH"}
+    if shutil.which("git") is None:
+        return {"outcome": "BLOCKED", "sample_evidence": {}, "error": "git is not available on PATH"}
+
+    temp_root = Path(tempfile.mkdtemp(prefix="macs-governance-hardening-"))
+    repo_root = temp_root / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    socket = temp_root / "governance-hardening.sock"
+    session = f"macs-governance-{os.getpid()}"
+    task_inspect_path = artifacts_dir / "governance-hardening-sample-task-inspect.json"
+    event_inspect_path = artifacts_dir / "governance-hardening-sample-event-inspect.json"
+    try:
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        _run_release_gate_cli(repo_root, "setup", "init")
+        _init_sample_git_repo(repo_root)
+        _write_worker_env_file(repo_root, {"MCP_CODEX_TOKEN": "governance-release-token"})
+        _configure_governance_policy(repo_root)
+        pane_id = _create_tmux_session(socket, session, window_name="codex")
+        _stage_tmux_capture(socket, pane_id, "codex --model gpt-5.4 --sandbox workspace-write --yolo")
+        _seed_worker_row(
+            repo_root / ".codex" / "orchestration" / "state.db",
+            worker_id="worker-codex-governance-release",
+            runtime_type="codex",
+            adapter_id="codex",
+            tmux_socket=str(socket),
+            tmux_session=session,
+            tmux_pane=pane_id,
+            capabilities=["implementation"],
+            operator_tags=["registered", "surface:mcp"],
+        )
+
+        create_result = _run_release_gate_cli(repo_root, "task", "create", "--summary", "Governance release sample", "--json")
+        task_id = json.loads(create_result.stdout)["data"]["result"]["task"]["task_id"]
+        assign_result = _run_release_gate_cli(repo_root, "task", "assign", "--task", task_id, "--json")
+        assign_payload = json.loads(assign_result.stdout)
+        _create_sample_repo_changes(repo_root)
+        checkpoint_result = _run_release_gate_cli(
+            repo_root,
+            "task",
+            "checkpoint",
+            "--task",
+            task_id,
+            "--target-action",
+            "task.close",
+            "--json",
+            env_overrides={"MACS_OPERATOR_ID": operator_id},
+        )
+        checkpoint_payload = json.loads(checkpoint_result.stdout)
+        task_inspect_result = _run_release_gate_cli(repo_root, "task", "inspect", "--task", task_id, "--json")
+        task_inspect_path.write_text(task_inspect_result.stdout, encoding="utf-8")
+        close_result = _run_release_gate_cli(
+            repo_root,
+            "task",
+            "close",
+            "--task",
+            task_id,
+            "--json",
+            env_overrides={"MACS_OPERATOR_ID": operator_id},
+        )
+        close_payload = json.loads(close_result.stdout)
+        close_event_id = close_payload["data"]["event"]["event_id"]
+        event_inspect_result = _run_release_gate_cli(repo_root, "event", "inspect", "--event", close_event_id, "--json")
+        event_inspect_path.write_text(event_inspect_result.stdout, encoding="utf-8")
+
+        if "governance-release-token" in task_inspect_result.stdout or "governance-release-token" in event_inspect_result.stdout:
+            raise RuntimeError("raw secret material leaked into governance-hardening sample artifacts")
+
+        task_payload = json.loads(task_inspect_result.stdout)
+        event_payload = json.loads(event_inspect_result.stdout)
+        task_evidence = task_payload["task"]["governance_evidence"]
+        event_evidence = event_payload["data"]["governance_evidence"]
+        version_pin = task_evidence["version_pins"]["surface_results"][0]
+        secret_scope = task_evidence["secret_scope"]["surface_results"][0]
+        checkpoint = event_evidence["checkpoint"]
+        decision_event = event_evidence["decision_event"]
+        return {
+            "outcome": "PASS",
+            "sample_evidence": {
+                "task_id": task_id,
+                "policy_version": task_evidence["policy"]["policy_version"],
+                "policy_path": task_evidence["policy"]["policy_path"],
+                "routing_decision_id": task_evidence["routing"]["decision_id"],
+                "routing_event_id": task_evidence["routing"]["related_event_id"],
+                "assignment_event_id": assign_payload["data"]["event"]["event_id"],
+                "checkpoint_id": checkpoint["checkpoint_id"],
+                "checkpoint_event_id": checkpoint_payload["data"]["event"]["event_id"],
+                "decision_event_id": decision_event["event_id"],
+                "close_event_id": close_event_id,
+                "task_inspect_path": str(task_inspect_path),
+                "event_inspect_path": str(event_inspect_path),
+                "version_pin": {
+                    "outcome": version_pin["outcome"],
+                    "surface_id": version_pin["surface_id"],
+                    "worker_id": version_pin["worker_id"],
+                },
+                "secret_scope": {
+                    "outcome": secret_scope["outcome"],
+                    "surface_id": secret_scope["surface_id"],
+                    "secret_ref": secret_scope["secret_ref"],
+                },
+                "checkpoint_gate": {
+                    "outcome": checkpoint["status"],
+                    "checkpoint_id": checkpoint["checkpoint_id"],
+                    "decision_linkage": "present" if decision_event.get("event_id") else "absent",
+                },
+            },
+        }
+    except Exception as exc:
+        return {
+            "outcome": "FAIL",
+            "sample_evidence": {
+                "task_inspect_path": str(task_inspect_path),
+                "event_inspect_path": str(event_inspect_path),
+            },
+            "error": str(exc),
+        }
+    finally:
+        subprocess.run(
+            ["tmux", "-S", str(socket), "kill-server"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def _run_release_gate_cli(
+    repo_root: Path,
+    *args: str,
+    env_overrides: dict[str, str | None] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = str(SOURCE_ROOT) if not pythonpath else str(SOURCE_ROOT) + os.pathsep + pythonpath
+    if env_overrides:
+        for key, value in env_overrides.items():
+            if value is None:
+                env.pop(key, None)
+            else:
+                env[key] = value
+    result = subprocess.run(
+        [sys.executable, "-m", "tools.orchestration.cli.main", "--repo", str(repo_root), *args],
+        cwd=SOURCE_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"command failed: {' '.join(args)}\nstdout={result.stdout}\nstderr={result.stderr}")
+    return result
+
+
+def _init_sample_git_repo(repo_root: Path) -> None:
+    for command in (
+        ["git", "init"],
+        ["git", "config", "user.email", "release-gate@example.test"],
+        ["git", "config", "user.name", "Release Gate Test"],
+    ):
+        result = subprocess.run(
+            command,
+            cwd=repo_root,
+            env=os.environ.copy(),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"git command failed: {' '.join(command)}\nstdout={result.stdout}\nstderr={result.stderr}")
+    (repo_root / ".gitignore").write_text(".codex/\n", encoding="utf-8")
+    (repo_root / "README.md").write_text("baseline\n", encoding="utf-8")
+    for command in (["git", "add", ".gitignore", "README.md"], ["git", "commit", "-m", "Initial commit"]):
+        result = subprocess.run(
+            command,
+            cwd=repo_root,
+            env=os.environ.copy(),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"git command failed: {' '.join(command)}\nstdout={result.stdout}\nstderr={result.stderr}")
+
+
+def _write_worker_env_file(repo_root: Path, values: dict[str, str]) -> None:
+    env_path = repo_root / ".codex" / "tmux-worker.env"
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [f"{key}={json.dumps(value)}" for key, value in sorted(values.items())]
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _configure_governance_policy(repo_root: Path) -> None:
+    policy_path = repo_root / ".codex" / "orchestration" / "governance-policy.json"
+    governance_policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    governance_policy["governed_surfaces"]["allowlisted_surfaces"] = sorted(
+        set(governance_policy["governed_surfaces"].get("allowlisted_surfaces", [])) | {"mcp"}
+    )
+    governance_policy["secret_scopes"] = [
+        {
+            "surface_id": "mcp",
+            "adapter_id": "codex",
+            "workflow_class": "implementation",
+            "operating_profile": "primary_plus_fallback",
+            "secret_ref": "mcp.codex.token",
+            "display_name": "Codex MCP token",
+            "redaction_label": "masked",
+        }
+    ]
+    governance_policy["surface_version_pins"] = [
+        {
+            "surface_id": "mcp",
+            "adapter_id": "codex",
+            "workflow_class": "implementation",
+            "operating_profile": "primary_plus_fallback",
+            "expected_runtime_identity": "codex",
+            "expected_model_identity": "gpt-5.4",
+        }
+    ]
+    policy_path.write_text(json.dumps(governance_policy, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _create_tmux_session(socket: Path, session: str, *, window_name: str) -> str:
+    subprocess.run(
+        ["tmux", "-S", str(socket), "new-session", "-d", "-s", session, "-n", window_name],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    pane_result = subprocess.run(
+        ["tmux", "-S", str(socket), "list-panes", "-t", session, "-F", "#{pane_id}"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    pane_id = pane_result.stdout.strip().splitlines()[0]
+    if not pane_id:
+        raise RuntimeError("tmux pane id was empty during governance-hardening sample setup")
+    return pane_id
+
+
+def _stage_tmux_capture(socket: Path, pane_id: str, content: str) -> None:
+    if not content:
+        return
+    subprocess.run(
+        ["tmux", "-S", str(socket), "send-keys", "-t", pane_id, "-l", content],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _seed_worker_row(
+    state_db: Path,
+    *,
+    worker_id: str,
+    runtime_type: str,
+    adapter_id: str,
+    tmux_socket: str,
+    tmux_session: str,
+    tmux_pane: str,
+    capabilities: list[str],
+    operator_tags: list[str],
+) -> None:
+    conn = sqlite3.connect(state_db)
+    try:
+        timestamp = utc_now()
+        conn.execute(
+            """
+            INSERT INTO workers (
+                worker_id, runtime_type, adapter_id, tmux_socket, tmux_session, tmux_pane,
+                state, capabilities, required_signal_status, last_evidence_at,
+                last_heartbeat_at, interruptibility, operator_tags
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                worker_id,
+                runtime_type,
+                adapter_id,
+                tmux_socket,
+                tmux_session,
+                tmux_pane,
+                "ready",
+                json.dumps(capabilities),
+                "required_only",
+                timestamp,
+                timestamp,
+                "interruptible",
+                json.dumps(operator_tags),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _create_sample_repo_changes(repo_root: Path) -> None:
+    readme_path = repo_root / "README.md"
+    readme_path.write_text(readme_path.read_text(encoding="utf-8") + "governance checkpoint change\n", encoding="utf-8")
+    docs_dir = repo_root / "docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    (docs_dir / "governance-release.md").write_text("governance release checkpoint context\n", encoding="utf-8")
+
+
 def run_subprocess(command: list[str]) -> dict[str, object]:
     env = os.environ.copy()
     pythonpath = env.get("PYTHONPATH", "")
@@ -338,6 +791,10 @@ def build_next_actions(criteria: dict[str, dict[str, object]]) -> list[str]:
         actions.append("Re-run and fix `python3 -m unittest tools.orchestration.tests.test_failure_drills_cli` before release sign-off.")
     if criteria["restart_recovery"]["outcome"] != "PASS":
         actions.append("Re-run and fix the targeted restart-recovery verification suite before release sign-off.")
+    if criteria["governance_hardening"]["outcome"] != "PASS":
+        actions.append(
+            "Re-run the governance-hardening verification slice and inspect `_bmad-output/release-evidence/governance-hardening-report.md`."
+        )
     if criteria["reference_dogfood"]["outcome"] != "PASS":
         actions.append("Re-run the four-worker dogfood scenario and inspect `_bmad-output/release-evidence/four-worker-dogfood-report.md`.")
     return actions
@@ -641,6 +1098,63 @@ def write_restart_recovery_report(report_path: Path, suite_result: dict[str, obj
     write_text_report(report_path, lines)
 
 
+def write_governance_hardening_report(report_path: Path, summary: dict[str, object]) -> None:
+    sample_evidence = summary.get("sample_evidence") or {}
+    controls = summary.get("controls") or []
+    lines = [
+        "# Governance Hardening Evidence Report",
+        "",
+        "## 1. Outcome",
+        "",
+        f"- Outcome: `{summary['outcome']}`",
+        f"- Suite command: `{summary['suite_command']}`",
+        f"- Suite return code: {summary['suite_returncode']}",
+        f"- Sample task inspect artifact: {sample_evidence.get('task_inspect_path') or 'none'}",
+        f"- Sample event inspect artifact: {sample_evidence.get('event_inspect_path') or 'none'}",
+        "",
+        "## 2. Control Summary",
+        "",
+        "| Control | Outcome | Evidence |",
+        "| --- | --- | --- |",
+    ]
+    for control in controls:
+        lines.append(
+            f"| {control['control_id']} | {control['outcome']} | {control.get('evidence_ref') or 'none'} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## 3. Coverage",
+            "",
+            "| Control | Scenario | Source |",
+            "| --- | --- | --- |",
+        ]
+    )
+    for item in summary.get("coverage", []):
+        lines.append(f"| {item['control_id']} | {item['scenario_id']} | `{item['source']}` |")
+    lines.extend(
+        [
+            "",
+            "## 4. Sample Evidence",
+            "",
+            f"- Policy version: {sample_evidence.get('policy_version') or 'unknown'}",
+            f"- Policy path: {sample_evidence.get('policy_path') or 'unknown'}",
+            f"- Routing decision: {sample_evidence.get('routing_decision_id') or 'unknown'}",
+            f"- Routing event: {sample_evidence.get('routing_event_id') or 'unknown'}",
+            f"- Checkpoint: {sample_evidence.get('checkpoint_id') or 'unknown'}",
+            f"- Decision event: {sample_evidence.get('decision_event_id') or 'unknown'}",
+            f"- version_pin outcome: {((sample_evidence.get('version_pin') or {}).get('outcome')) or 'unknown'}",
+            f"- secret_scope outcome: {((sample_evidence.get('secret_scope') or {}).get('outcome')) or 'unknown'}",
+            f"- checkpoint_gate linkage: {((sample_evidence.get('checkpoint_gate') or {}).get('decision_linkage')) or 'unknown'}",
+            "",
+            "## 5. Sign-Off",
+            "",
+            "- Human-readable and machine-readable governance-hardening evidence point to the same sample artifacts.",
+        ]
+    )
+    write_text_report(report_path, lines)
+
+
 def write_release_gate_report(report_path: Path, repo_root: Path, release_gate: dict[str, object]) -> None:
     lines = [
         "# Release Gate Command Verification",
@@ -661,6 +1175,7 @@ def write_release_gate_report(report_path: Path, repo_root: Path, release_gate: 
         f"| adapter_qualification | {release_gate['criteria']['adapter_qualification']['outcome']} | {release_gate['evidence']['adapter_reports']['codex']} and peer reports |",
         f"| failure_mode_matrix | {release_gate['criteria']['failure_mode_matrix']['outcome']} | {release_gate['evidence']['failure_mode_matrix_report']} |",
         f"| restart_recovery | {release_gate['criteria']['restart_recovery']['outcome']} | {release_gate['evidence']['restart_recovery_report']} |",
+        f"| governance_hardening | {release_gate['criteria']['governance_hardening']['outcome']} | {release_gate['evidence']['governance_hardening_report']} |",
         f"| reference_dogfood | {release_gate['criteria']['reference_dogfood']['outcome']} | {release_gate['evidence']['four_worker_dogfood_report']} |",
         "",
         "## 3. Evidence Package",
@@ -669,6 +1184,8 @@ def write_release_gate_report(report_path: Path, repo_root: Path, release_gate: 
         f"- Adapter qualification reports: {', '.join(release_gate['evidence']['adapter_reports'].values())}",
         f"- Failure-mode matrix report: {release_gate['evidence']['failure_mode_matrix_report']}",
         f"- Restart-recovery report: {release_gate['evidence']['restart_recovery_report']}",
+        f"- Governance-hardening report: {release_gate['evidence']['governance_hardening_report']}",
+        f"- Governance-hardening summary: {release_gate['evidence']['governance_hardening_summary_json']}",
         f"- Four-worker dogfood report: {release_gate['evidence']['four_worker_dogfood_report']}",
         f"- Machine-readable summary: {release_gate['evidence']['release_gate_summary_json']}",
         "",

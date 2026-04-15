@@ -18,6 +18,12 @@ def build_adapter_registry() -> dict[str, BaseTmuxAdapter]:
             qualification_status="provisional",
             optional_enrichments=[],
             governed_surfaces=["mcp"],
+            governed_surface_requirements={
+                "mcp": {
+                    "requires_secret": True,
+                    "delivery_mode": "preloaded_worker_env",
+                }
+            },
         ),
         "gemini": BaseTmuxAdapter(
             adapter_id="gemini",
@@ -27,6 +33,12 @@ def build_adapter_registry() -> dict[str, BaseTmuxAdapter]:
             qualification_status="provisional",
             optional_enrichments=[],
             governed_surfaces=["mcp"],
+            governed_surface_requirements={
+                "mcp": {
+                    "requires_secret": True,
+                    "delivery_mode": "preloaded_worker_env",
+                }
+            },
         ),
         "local": BaseTmuxAdapter(
             adapter_id="local",

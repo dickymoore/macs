@@ -10,10 +10,22 @@ import socket
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from tools.orchestration.adapters.registry import get_adapter
+from tools.orchestration.checkpoints import (
+    capture_review_checkpoint_bundle,
+    CheckpointCaptureError,
+    normalize_target_action,
+    validate_task_checkpoint_gate,
+)
 from tools.orchestration.config import adapter_settings_path
-from tools.orchestration.history import inspect_lease, list_aggregate_events
+from tools.orchestration.history import (
+    inspect_lease,
+    list_aggregate_events,
+    list_task_checkpoints,
+    summarize_governance_evidence,
+)
 from tools.orchestration.interventions import (
     build_runtime_pause_resume_status,
     intervention_blocking_condition,
@@ -28,7 +40,14 @@ from tools.orchestration.locks import (
     release_locks_for_task,
     reserve_locks_for_task,
 )
-from tools.orchestration.policy import apply_audit_content_policy, governance_policy_path, load_governance_policy
+from tools.orchestration.policy import (
+    apply_audit_content_policy,
+    evaluate_action_secret_resolution,
+    governance_policy_path,
+    load_governance_policy,
+    secret_resolution_blocking_condition,
+    secret_resolution_next_action,
+)
 from tools.orchestration.recovery import (
     abandon_recovery_run,
     complete_recovery_run,
@@ -67,9 +86,7 @@ def normalized_intervention_rationale(action: str, rationale: str | None) -> str
     return f"operator_requested_{action}"
 
 
-def record_intervention_decision(
-    state_db: Path,
-    events_ndjson: Path,
+def build_intervention_decision_event(
     *,
     task_id: str,
     decision_action: str,
@@ -77,7 +94,9 @@ def record_intervention_decision(
     lease_id: str | None = None,
     worker_id: str | None = None,
     recovery_run_id: str | None = None,
-) -> dict[str, object]:
+    checkpoint_id: str | None = None,
+    target_action: str | None = None,
+) -> tuple[EventRecord, str]:
     intervention_rationale = normalized_intervention_rationale(decision_action, rationale)
     payload = {
         "decision_action": decision_action,
@@ -90,6 +109,10 @@ def record_intervention_decision(
             "recovery_run_id": recovery_run_id,
         },
     }
+    if checkpoint_id:
+        payload["checkpoint_id"] = checkpoint_id
+    if target_action:
+        payload["target_action"] = target_action
     event = EventRecord(
         event_id=f"evt-intervention-decision-{uuid.uuid4().hex[:12]}",
         event_type="intervention.decision_recorded",
@@ -103,7 +126,34 @@ def record_intervention_decision(
         payload=payload,
         redaction_level="none",
     )
-    write_eventful_transaction(state_db, events_ndjson, event, lambda conn: None)
+    return event, intervention_rationale
+
+
+def record_intervention_decision(
+    state_db: Path,
+    events_ndjson: Path,
+    *,
+    task_id: str,
+    decision_action: str,
+    rationale: str | None,
+    lease_id: str | None = None,
+    worker_id: str | None = None,
+    recovery_run_id: str | None = None,
+    checkpoint_id: str | None = None,
+    target_action: str | None = None,
+    mutator: Callable | None = None,
+) -> dict[str, object]:
+    event, intervention_rationale = build_intervention_decision_event(
+        task_id=task_id,
+        decision_action=decision_action,
+        rationale=rationale,
+        lease_id=lease_id,
+        worker_id=worker_id,
+        recovery_run_id=recovery_run_id,
+        checkpoint_id=checkpoint_id,
+        target_action=target_action,
+    )
+    write_eventful_transaction(state_db, events_ndjson, event, mutator or (lambda conn: None))
     return {
         "event": event.as_export(),
         "intervention_rationale": intervention_rationale,
@@ -252,6 +302,9 @@ def inspect_task_context(state_db: Path, task_id: str) -> dict[str, object]:
     )
     task["blocking_condition"] = recovery.get("blocking_condition")
     task["next_action"] = recovery.get("next_action")
+    secret_resolution = _routing_secret_resolution(routing_decision)
+    if secret_resolution is not None:
+        task["secret_resolution"] = secret_resolution
     if (
         task["state"] == "pending_assignment"
         and routing_decision is not None
@@ -266,6 +319,14 @@ def inspect_task_context(state_db: Path, task_id: str) -> dict[str, object]:
             governance_policy_path=routing_decision["rationale"].get("governance_policy_path"),
             adapter_settings_path=str(adapter_settings_path(state_db.parent)),
         )
+    if (
+        task["state"] == "pending_assignment"
+        and task["blocking_condition"] is None
+        and isinstance(secret_resolution, dict)
+        and secret_resolution.get("status") == "blocked"
+    ):
+        task["blocking_condition"] = secret_resolution.get("blocking_condition")
+        task["next_action"] = secret_resolution.get("next_action")
 
     conn = connect_state_db(state_db)
     try:
@@ -334,8 +395,10 @@ def inspect_task_context(state_db: Path, task_id: str) -> dict[str, object]:
                 for row in lock_rows
             ],
         },
+        "recent_checkpoint_refs": list_task_checkpoints(state_db, task_id),
         "recent_event_refs": list_aggregate_events(state_db, task_id),
     }
+    task["governance_evidence"] = summarize_governance_evidence(state_db, task=task)
     return task
 
 
@@ -622,8 +685,76 @@ def _assign_task_impl(
     if not lock_check["ok"]:
         raise LockConflictError(json.dumps(lock_check["conflicts"], sort_keys=True))
 
-    decision = persist_routing_decision(state_db, events_ndjson, task_id, evaluation, lock_check_result=lock_check)
     governance_policy = load_governance_policy(governance_policy_path(repo_root / ".codex" / "orchestration"))
+    worker = inspect_worker(state_db, evaluation.selected_worker_id)
+    adapter = get_adapter(worker["adapter_id"])
+    selected_candidate = next(
+        (candidate for candidate in evaluation.ranked_candidates if candidate["worker_id"] == evaluation.selected_worker_id),
+        None,
+    )
+    selected_surface_ids = [
+        str(surface["surface_id"])
+        for surface in ((selected_candidate or {}).get("governance", {}) or {}).get("allowed_surfaces", [])
+        if isinstance(surface, dict) and surface.get("surface_id")
+    ]
+    secret_resolution = evaluate_action_secret_resolution(
+        governance_policy,
+        repo_root=repo_root,
+        adapter_descriptor=adapter.descriptor(),
+        adapter_id=str(worker["adapter_id"]),
+        workflow_class=str(routing_task["workflow_class"]),
+        operating_profile=str(governance_policy.get("operating_profile") or ""),
+        surface_ids=selected_surface_ids,
+    )
+    secret_summary = dict(secret_resolution["audit_summary"])
+    secret_blocking_condition = secret_resolution_blocking_condition(secret_summary)
+    if secret_blocking_condition is not None:
+        secret_summary["blocking_condition"] = secret_blocking_condition
+        secret_summary["next_action"] = secret_resolution_next_action(
+            task_id=task_id,
+            secret_resolution=secret_summary,
+            governance_policy_path=str(governance_policy_path(repo_root / ".codex" / "orchestration")),
+            secret_source_paths=list(secret_resolution["secret_source_paths"]),
+        )
+    decision = persist_routing_decision(
+        state_db,
+        events_ndjson,
+        task_id,
+        evaluation,
+        lock_check_result=lock_check,
+        secret_resolution=secret_summary,
+    )
+    if not secret_resolution["eligible"]:
+        blocked_surface = _first_blocked_surface(secret_summary)
+        raise TaskActionError(
+            "Selected governed action failed secret-scope enforcement",
+            code="policy_blocked",
+            exit_code=4,
+            result={
+                "routing_decision": decision,
+                "routing_evaluation": evaluation.as_dict(),
+                "secret_resolution": secret_summary,
+                "controller_state_changed": False,
+                "blocking_condition": secret_summary.get("blocking_condition"),
+                "next_action": secret_summary.get("next_action"),
+                "affected_refs": {
+                    "task_id": task_id,
+                    "worker_id": evaluation.selected_worker_id,
+                    **(
+                        {
+                            key: value
+                            for key, value in {
+                                "surface_id": blocked_surface.get("surface_id"),
+                                "secret_ref": _first_blocked_surface_secret_ref(blocked_surface),
+                            }.items()
+                            if value is not None
+                        }
+                        if blocked_surface is not None
+                        else {}
+                    ),
+                },
+            },
+        )
     lease_id = f"lease-{uuid.uuid4().hex[:12]}"
     timestamp = utc_now()
     governed_audit_content, redaction_level = apply_audit_content_policy(
@@ -647,6 +778,7 @@ def _assign_task_impl(
             "routing_decision_id": decision["decision_id"],
             "governance_policy_version": governance_policy["policy_version"],
             "audit_content": governed_audit_content,
+            **({"secret_resolution": secret_summary} if secret_summary.get("status") != "not_required" else {}),
             **(intervention_metadata or {}),
         },
         redaction_level=redaction_level,
@@ -704,8 +836,6 @@ def _assign_task_impl(
         causation_id=event.event_id,
         event_metadata=intervention_metadata,
     )
-    worker = inspect_worker(state_db, evaluation.selected_worker_id)
-    adapter = get_adapter(worker["adapter_id"])
     assignment_payload = assignment_payload_for_task(
         task=task,
         routing_task=routing_task,
@@ -713,7 +843,11 @@ def _assign_task_impl(
         worker_id=evaluation.selected_worker_id,
     )
     try:
-        dispatch_result = adapter.dispatch(worker, assignment_payload)
+        dispatch_result = adapter.dispatch(
+            worker,
+            assignment_payload,
+            secret_context=secret_resolution["dispatch_secret_context"],
+        )
         if not dispatch_result.get("ok"):
             raise RuntimeError(f"Assignment dispatch failed for task {task_id}")
         ack = adapter.acknowledge_delivery(worker, event.correlation_id)
@@ -805,6 +939,7 @@ def _assign_task_impl(
             "selected_worker_id": evaluation.selected_worker_id,
             "lease_id": lease_id,
             "routing_decision": decision,
+            "secret_resolution": secret_summary,
             "locks": locks,
         },
         "event": event.as_export(),
@@ -1000,7 +1135,131 @@ def reconcile_task_recovery(
     }
 
 
+def checkpoint_task(
+    repo_root: Path,
+    checkpoints_dir: Path,
+    state_db: Path,
+    events_ndjson: Path,
+    *,
+    task_id: str,
+    target_action: str,
+    decision_event_id: str | None = None,
+) -> dict[str, object]:
+    task = inspect_task(state_db, task_id)
+    actor_id = operator_actor_id()
+    affected_refs = _checkpoint_affected_refs(task)
+
+    try:
+        normalized_target_action = normalize_target_action(target_action)
+    except CheckpointCaptureError as exc:
+        raise TaskActionError(
+            str(exc),
+            code="invalid_argument",
+            exit_code=2,
+            result={
+                "controller_state_changed": False,
+                "affected_refs": affected_refs,
+                "next_action": f"macs task inspect --task {task_id}",
+            },
+        ) from exc
+
+    captured_at = utc_now()
+    try:
+        bundle = capture_review_checkpoint_bundle(
+            repo_root,
+            checkpoints_dir,
+            task_id=task_id,
+            target_action=normalized_target_action,
+            actor_id=actor_id,
+            affected_refs=affected_refs,
+            captured_at=captured_at,
+        )
+    except CheckpointCaptureError as exc:
+        raise TaskActionError(
+            str(exc),
+            code="degraded_precondition",
+            exit_code=5,
+            result={
+                "controller_state_changed": False,
+                "affected_refs": affected_refs,
+                "next_action": f"macs task inspect --task {task_id}",
+            },
+        ) from exc
+
+    event = EventRecord(
+        event_id=f"evt-review-checkpoint-{uuid.uuid4().hex[:12]}",
+        event_type="review.checkpoint_recorded",
+        aggregate_type="task",
+        aggregate_id=task_id,
+        timestamp=captured_at,
+        actor_type="operator",
+        actor_id=actor_id,
+        correlation_id=f"corr-review-checkpoint-{uuid.uuid4().hex[:12]}",
+        causation_id=decision_event_id,
+        payload={
+            "checkpoint_id": bundle.checkpoint_id,
+            "task_id": task_id,
+            "target_action": normalized_target_action,
+            "captured_at": bundle.captured_at,
+            "affected_refs": affected_refs,
+            "actor_identity": {
+                "actor_type": "operator",
+                "actor_id": actor_id,
+            },
+            "evidence_refs": bundle.evidence_refs,
+            "baseline_fingerprint": bundle.baseline_fingerprint,
+            **({"decision_event_id": decision_event_id} if decision_event_id else {}),
+        },
+        redaction_level="none",
+    )
+
+    def mutator(conn) -> None:
+        current = conn.execute("SELECT task_id FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+        if current is None:
+            raise TaskNotFoundError(f"Task not found: {task_id}")
+        conn.execute(
+            """
+            INSERT INTO review_checkpoints (
+                checkpoint_id, task_id, target_action, actor_type, actor_id, captured_at,
+                event_id, decision_event_id, affected_refs, evidence_refs, baseline_fingerprint
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                bundle.checkpoint_id,
+                task_id,
+                normalized_target_action,
+                "operator",
+                actor_id,
+                bundle.captured_at,
+                event.event_id,
+                decision_event_id,
+                json.dumps(affected_refs, sort_keys=True),
+                json.dumps(bundle.evidence_refs, sort_keys=True),
+                json.dumps(bundle.baseline_fingerprint, sort_keys=True),
+            ),
+        )
+
+    write_eventful_transaction(state_db, events_ndjson, event, mutator)
+    return {
+        "result": {
+            "task": inspect_task(state_db, task_id),
+            "checkpoint_id": bundle.checkpoint_id,
+            "target_action": normalized_target_action,
+            "captured_at": bundle.captured_at,
+            "task_id": task_id,
+            "event_id": event.event_id,
+            "artifact_refs": bundle.evidence_refs,
+            "baseline_fingerprint": bundle.baseline_fingerprint,
+            "controller_state_changed": True,
+            "affected_refs": affected_refs,
+            "next_action": f"macs task inspect --task {task_id}",
+        },
+        "event": event.as_export(),
+    }
+
+
 def close_task(
+    repo_root: Path,
     state_db: Path,
     events_ndjson: Path,
     *,
@@ -1011,9 +1270,56 @@ def close_task(
         raise InvariantViolationError(f"Task {task_id} is not closable from state {task['state']}")
     if task["current_lease_id"] is None:
         raise InvariantViolationError(f"Task {task_id} cannot close without a live lease")
+    affected_refs = _checkpoint_affected_refs(task)
+
+    try:
+        review_gate = validate_task_checkpoint_gate(
+            repo_root,
+            state_db,
+            task=task,
+            target_action="task.close",
+        )
+    except CheckpointCaptureError as exc:
+        raise TaskActionError(
+            str(exc),
+            code="degraded_precondition",
+            exit_code=5,
+            result={
+                "controller_state_changed": False,
+                "affected_refs": affected_refs,
+                "next_action": f"macs task inspect --task {task_id}",
+            },
+        ) from exc
+    if review_gate["status"] != "satisfied":
+        raise TaskActionError(
+            str(review_gate["message"]),
+            code="policy_blocked",
+            exit_code=4,
+            result={
+                "controller_state_changed": False,
+                "affected_refs": affected_refs,
+                "next_action": review_gate["remediation_command"],
+                "review_gate": review_gate,
+            },
+        )
+
+    checkpoint_id = str(review_gate["checkpoint"]["checkpoint_id"])
+    decision = _record_checkpoint_approval_decision(
+        state_db,
+        events_ndjson,
+        task=task,
+        target_action="task.close",
+        checkpoint_id=checkpoint_id,
+    )
+    review_gate = dict(review_gate)
+    review_gate["decision_event_id"] = decision["event"]["event_id"]
+    review_gate["checkpoint"] = {
+        **review_gate["checkpoint"],
+        "decision_event_id": decision["event"]["event_id"],
+    }
 
     timestamp = utc_now()
-    correlation_id = f"corr-task-close-{uuid.uuid4().hex[:12]}"
+    correlation_id = str(decision["event"]["correlation_id"])
     lease_event = EventRecord(
         event_id=f"evt-lease-complete-{uuid.uuid4().hex[:12]}",
         event_type="lease.completed",
@@ -1023,11 +1329,14 @@ def close_task(
         actor_type="controller",
         actor_id="controller-main",
         correlation_id=correlation_id,
-        causation_id=None,
+        causation_id=str(decision["event"]["event_id"]),
         payload={
             "task_id": task_id,
             "lease_id": task["current_lease_id"],
             "worker_id": task["current_worker_id"],
+            "decision_event_id": decision["event"]["event_id"],
+            "checkpoint_id": checkpoint_id,
+            "target_action": "task.close",
         },
         redaction_level="none",
     )
@@ -1058,11 +1367,15 @@ def close_task(
         actor_type="controller",
         actor_id="controller-main",
         correlation_id=correlation_id,
-        causation_id=None,
+        causation_id=lease_event.event_id,
         payload={
             "task_id": task_id,
             "lease_id": task["current_lease_id"],
+            "worker_id": task["current_worker_id"],
             "released_lock_ids": [lock["lock_id"] for lock in released_locks],
+            "decision_event_id": decision["event"]["event_id"],
+            "checkpoint_id": checkpoint_id,
+            "target_action": "task.close",
         },
         redaction_level="none",
     )
@@ -1079,6 +1392,11 @@ def close_task(
             "task": inspect_task(state_db, task_id),
             "lease": inspect_lease(state_db, task["current_lease_id"]),
             "locks": released_locks,
+            "checkpoint_id": checkpoint_id,
+            "decision_event_id": decision["event"]["event_id"],
+            "review_gate": review_gate,
+            "controller_state_changed": True,
+            "next_action": f"macs task inspect --task {task_id}",
         },
         "event": task_event.as_export(),
     }
@@ -1495,12 +1813,63 @@ def _rollback_assignment_side_effect_failure(
 
 
 def archive_task(
+    repo_root: Path,
     state_db: Path,
     events_ndjson: Path,
     *,
     task_id: str,
 ) -> dict[str, object]:
     task = inspect_task(state_db, task_id)
+    if task["state"] != "completed":
+        raise InvariantViolationError(f"Task {task_id} is not archivable from state {task['state']}")
+    affected_refs = _checkpoint_affected_refs(task)
+
+    try:
+        review_gate = validate_task_checkpoint_gate(
+            repo_root,
+            state_db,
+            task=task,
+            target_action="task.archive",
+        )
+    except CheckpointCaptureError as exc:
+        raise TaskActionError(
+            str(exc),
+            code="degraded_precondition",
+            exit_code=5,
+            result={
+                "controller_state_changed": False,
+                "affected_refs": affected_refs,
+                "next_action": f"macs task inspect --task {task_id}",
+            },
+        ) from exc
+    if review_gate["status"] != "satisfied":
+        raise TaskActionError(
+            str(review_gate["message"]),
+            code="policy_blocked",
+            exit_code=4,
+            result={
+                "controller_state_changed": False,
+                "affected_refs": affected_refs,
+                "next_action": review_gate["remediation_command"],
+                "review_gate": review_gate,
+            },
+        )
+
+    checkpoint_id = str(review_gate["checkpoint"]["checkpoint_id"])
+    decision = _record_checkpoint_approval_decision(
+        state_db,
+        events_ndjson,
+        task=task,
+        target_action="task.archive",
+        checkpoint_id=checkpoint_id,
+    )
+    review_gate = dict(review_gate)
+    review_gate["decision_event_id"] = decision["event"]["event_id"]
+    review_gate["checkpoint"] = {
+        **review_gate["checkpoint"],
+        "decision_event_id": decision["event"]["event_id"],
+    }
+
     timestamp = utc_now()
     event = EventRecord(
         event_id=f"evt-task-archive-{uuid.uuid4().hex[:12]}",
@@ -1510,9 +1879,15 @@ def archive_task(
         timestamp=timestamp,
         actor_type="controller",
         actor_id="controller-main",
-        correlation_id=f"corr-task-archive-{uuid.uuid4().hex[:12]}",
-        causation_id=None,
-        payload={"task_id": task_id, "from_state": task["state"]},
+        correlation_id=str(decision["event"]["correlation_id"]),
+        causation_id=str(decision["event"]["event_id"]),
+        payload={
+            "task_id": task_id,
+            "from_state": task["state"],
+            "decision_event_id": decision["event"]["event_id"],
+            "checkpoint_id": checkpoint_id,
+            "target_action": "task.archive",
+        },
         redaction_level="none",
     )
     transition_task_state(
@@ -1525,6 +1900,11 @@ def archive_task(
     return {
         "result": {
             "task": inspect_task(state_db, task_id),
+            "checkpoint_id": checkpoint_id,
+            "decision_event_id": decision["event"]["event_id"],
+            "review_gate": review_gate,
+            "controller_state_changed": True,
+            "next_action": f"macs task inspect --task {task_id}",
         },
         "event": event.as_export(),
     }
@@ -1542,6 +1922,99 @@ def _row_to_task(row) -> dict[str, object]:
         "current_worker_id": row["current_worker_id"],
         "current_lease_id": row["current_lease_id"],
         "routing_policy_ref": row["routing_policy_ref"],
+    }
+
+
+def _routing_secret_resolution(routing_decision: dict[str, object] | None) -> dict[str, object] | None:
+    if not isinstance(routing_decision, dict):
+        return None
+    rationale = routing_decision.get("rationale")
+    if not isinstance(rationale, dict):
+        return None
+    secret_resolution = rationale.get("secret_resolution")
+    if not isinstance(secret_resolution, dict):
+        return None
+    return secret_resolution
+
+
+def _first_blocked_surface(secret_resolution: dict[str, object]) -> dict[str, object] | None:
+    for surface_summary in secret_resolution.get("surface_summaries", []):
+        if isinstance(surface_summary, dict) and surface_summary.get("reason"):
+            return surface_summary
+    return None
+
+
+def _first_blocked_surface_secret_ref(surface_summary: dict[str, object] | None) -> str | None:
+    if not isinstance(surface_summary, dict):
+        return None
+    for key in ("unresolved_secret_refs", "required_secret_refs", "resolved_secret_refs"):
+        values = surface_summary.get(key) or []
+        if values:
+            return str(values[0])
+    for scope in surface_summary.get("applicable_scopes", []):
+        if isinstance(scope, dict) and scope.get("secret_ref"):
+            return str(scope["secret_ref"])
+    return None
+
+
+def _checkpoint_affected_refs(task: dict[str, object]) -> dict[str, object]:
+    return {
+        key: value
+        for key, value in {
+            "task_id": task["task_id"],
+            "lease_id": task.get("current_lease_id"),
+            "worker_id": task.get("current_worker_id"),
+        }.items()
+        if value is not None
+    }
+
+
+def _record_checkpoint_approval_decision(
+    state_db: Path,
+    events_ndjson: Path,
+    *,
+    task: dict[str, object],
+    target_action: str,
+    checkpoint_id: str,
+) -> dict[str, object]:
+    task_id = str(task["task_id"])
+    rationale = f"operator approved {target_action} using checkpoint {checkpoint_id}"
+
+    def mutator(conn) -> None:
+        row = conn.execute(
+            """
+            SELECT checkpoint_id
+            FROM review_checkpoints
+            WHERE checkpoint_id = ? AND task_id = ? AND target_action = ?
+            """,
+            (checkpoint_id, task_id, target_action),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError(
+                f"Checkpoint {checkpoint_id} is missing for task {task_id} and target action {target_action}"
+            )
+        conn.execute(
+            """
+            UPDATE review_checkpoints
+            SET decision_event_id = ?
+            WHERE checkpoint_id = ?
+            """,
+            (event.event_id, checkpoint_id),
+        )
+
+    event, intervention_rationale = build_intervention_decision_event(
+        task_id=task_id,
+        decision_action=target_action,
+        rationale=rationale,
+        lease_id=task.get("current_lease_id"),
+        worker_id=task.get("current_worker_id"),
+        checkpoint_id=checkpoint_id,
+        target_action=target_action,
+    )
+    write_eventful_transaction(state_db, events_ndjson, event, mutator)
+    return {
+        "event": event.as_export(),
+        "intervention_rationale": intervention_rationale,
     }
 
 

@@ -96,6 +96,11 @@ class SetupInitTests(unittest.TestCase):
         adapter_id: str,
         state: str = "ready",
         capabilities: list[str] | None = None,
+        operator_tags: list[str] | None = None,
+        tmux_socket: str | None = None,
+        tmux_session: str | None = None,
+        tmux_pane: str = "%1",
+        freshness_seconds: int = 0,
     ) -> None:
         state_db = self.repo_root / ".codex" / "orchestration" / "state.db"
         conn = sqlite3.connect(state_db)
@@ -112,21 +117,48 @@ class SetupInitTests(unittest.TestCase):
                     worker_id,
                     runtime_type,
                     adapter_id,
-                    self.env["TMUX_SOCKET"],
-                    self.env["TMUX_SESSION"],
-                    "%1",
+                    tmux_socket or self.env["TMUX_SOCKET"],
+                    tmux_session or self.env["TMUX_SESSION"],
+                    tmux_pane,
                     state,
                     json.dumps(capabilities or [runtime_type]),
                     "required_only",
-                    self.iso_now(),
-                    self.iso_now(),
+                    self.iso_now(seconds_ago=freshness_seconds),
+                    self.iso_now(seconds_ago=freshness_seconds),
                     "interruptible",
-                    json.dumps(["registered"]),
+                    json.dumps(operator_tags or ["registered"]),
                 ),
             )
             conn.commit()
         finally:
             conn.close()
+
+    def update_governance_policy(self, mutator) -> dict[str, object]:
+        governance_path = self.repo_root / ".codex" / "orchestration" / "governance-policy.json"
+        governance_policy = json.loads(governance_path.read_text(encoding="utf-8"))
+        updated = mutator(governance_policy)
+        governance_path.write_text(json.dumps(updated, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return updated
+
+    def test_setup_init_bootstraps_review_checkpoint_authority_table_and_bundle_dir(self) -> None:
+        self.init_repo()
+        orchestration_dir = self.repo_root / ".codex" / "orchestration"
+        self.assertTrue((orchestration_dir / "checkpoints").is_dir())
+
+        state_db = orchestration_dir / "state.db"
+        conn = sqlite3.connect(state_db)
+        try:
+            row = conn.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'review_checkpoints'
+                """
+            ).fetchone()
+        finally:
+            conn.close()
+
+        self.assertIsNotNone(row)
 
     def start_tmux_worker(self, name: str) -> tuple[str, str, str]:
         if shutil.which("tmux") is None:
@@ -155,6 +187,16 @@ class SetupInitTests(unittest.TestCase):
             text=True,
         )
         return str(socket), session, pane_id
+
+    def stage_tmux_capture(self, tmux_socket: str, tmux_pane: str, content: str) -> None:
+        if not content:
+            return
+        subprocess.run(
+            ["tmux", "-S", tmux_socket, "send-keys", "-t", tmux_pane, "-l", content],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
     def seed_interrupted_recovery_run(
         self,
@@ -274,6 +316,337 @@ class SetupInitTests(unittest.TestCase):
         self.assertEqual(governance_policy["policy_version"], "phase1-governance-v1")
         self.assertIn("audit_content", governance_policy)
         self.assertIn("governed_surfaces", governance_policy)
+        self.assertEqual(governance_policy["operating_profile"], "primary_plus_fallback")
+        self.assertEqual(governance_policy["surface_version_pins"], [])
+        self.assertEqual(governance_policy["secret_scopes"], [])
+
+    def test_surface_version_pin_resolution_returns_explicit_none_configured_when_field_missing(self) -> None:
+        from tools.orchestration.policy import resolve_surface_version_pins
+
+        summary = resolve_surface_version_pins(
+            {
+                "policy_version": "phase1-governance-v1",
+                "governed_surfaces": {
+                    "allowlisted_surfaces": ["mcp"],
+                    "pinned_surfaces": {"mcp": ["codex"]},
+                },
+                "workflow_surface_overrides": {},
+                "audit_content": {},
+            },
+            workflow_class="implementation",
+            operating_profile="primary_plus_fallback",
+            adapter_id="codex",
+            surface_id="mcp",
+        )
+
+        self.assertEqual(summary["state"], "none_configured")
+        self.assertEqual(summary["effective_state"], "none_configured")
+        self.assertEqual(summary["normalized_pins"], [])
+        self.assertEqual(summary["effective_pins"], [])
+
+    def test_secret_scope_resolution_returns_explicit_none_configured_when_field_missing(self) -> None:
+        from tools.orchestration.policy import resolve_secret_scopes
+
+        summary = resolve_secret_scopes(
+            {
+                "policy_version": "phase1-governance-v1",
+                "governed_surfaces": {
+                    "allowlisted_surfaces": ["mcp"],
+                    "pinned_surfaces": {"mcp": ["codex"]},
+                },
+                "workflow_surface_overrides": {},
+                "audit_content": {},
+            },
+            workflow_class="implementation",
+            operating_profile="primary_plus_fallback",
+            adapter_id="codex",
+            surface_id="mcp",
+        )
+
+        self.assertEqual(summary["state"], "none_configured")
+        self.assertEqual(summary["effective_state"], "none_configured")
+        self.assertEqual(summary["normalized_scopes"], [])
+        self.assertEqual(summary["effective_scopes"], [])
+
+    def test_secret_scope_resolution_rejects_inline_secret_material_fields(self) -> None:
+        from tools.orchestration.policy import GovernancePolicyValidationError, resolve_secret_scopes
+
+        with self.assertRaisesRegex(
+            GovernancePolicyValidationError,
+            r"secret_scopes\[0\].*(password|secret_value).*(password|secret_value)",
+        ):
+            resolve_secret_scopes(
+                {
+                    "policy_version": "phase1-governance-v1",
+                    "operating_profile": "primary_plus_fallback",
+                    "governed_surfaces": {
+                        "allowlisted_surfaces": ["mcp"],
+                        "pinned_surfaces": {"mcp": ["codex"]},
+                    },
+                    "workflow_surface_overrides": {},
+                    "secret_scopes": [
+                        {
+                            "surface_id": "mcp",
+                            "adapter_id": "codex",
+                            "workflow_class": "implementation",
+                            "operating_profile": "primary_plus_fallback",
+                            "secret_ref": "mcp.codex.token",
+                            "display_name": "Codex MCP token",
+                            "redaction_label": "masked",
+                            "secret_value": {"inline_field_present": True},
+                            "password": ["drop-this-field"],
+                        },
+                        {
+                            "surface_id": "mcp",
+                            "adapter_id": "codex",
+                            "workflow_class": "implementation",
+                            "operating_profile": "full_hybrid",
+                            "secret_ref": "mcp.codex.hybrid",
+                            "display_name": "Codex hybrid token",
+                            "redaction_label": "masked",
+                        },
+                    ],
+                    "audit_content": {},
+                },
+                workflow_class="implementation",
+                operating_profile="primary_plus_fallback",
+                adapter_id="codex",
+                surface_id="mcp",
+            )
+
+    def test_surface_version_pin_resolution_filters_to_effective_context(self) -> None:
+        from tools.orchestration.policy import resolve_surface_version_pins
+
+        summary = resolve_surface_version_pins(
+            {
+                "policy_version": "phase1-governance-v1",
+                "operating_profile": "primary_plus_fallback",
+                "governed_surfaces": {
+                    "allowlisted_surfaces": ["mcp"],
+                    "pinned_surfaces": {"mcp": ["codex"]},
+                },
+                "workflow_surface_overrides": {},
+                "surface_version_pins": [
+                    {
+                        "surface_id": "mcp",
+                        "adapter_id": "codex",
+                        "workflow_class": "implementation",
+                        "operating_profile": "primary_plus_fallback",
+                        "expected_runtime_identity": "codex",
+                        "expected_model_identity": "gpt-5.4",
+                    },
+                    {
+                        "surface_id": "mcp",
+                        "adapter_id": "codex",
+                        "workflow_class": "review",
+                        "operating_profile": "full_hybrid",
+                        "expected_runtime_identity": "codex",
+                        "expected_model_identity": "gpt-5.3",
+                    },
+                ],
+                "audit_content": {},
+            },
+            workflow_class="implementation",
+            operating_profile="primary_plus_fallback",
+            adapter_id="codex",
+            surface_id="mcp",
+        )
+
+        self.assertEqual(summary["state"], "configured")
+        self.assertEqual(summary["effective_state"], "pins_apply")
+        self.assertEqual(len(summary["normalized_pins"]), 2)
+        self.assertEqual(len(summary["effective_pins"]), 1)
+        self.assertEqual(summary["effective_pins"][0]["expected_model_identity"], "gpt-5.4")
+
+    def test_surface_version_evidence_evaluation_reports_missing_stale_and_untrusted_fail_closed(self) -> None:
+        from tools.orchestration.policy import evaluate_surface_version_evidence
+
+        governance_policy = {
+            "policy_version": "phase1-governance-v1",
+            "operating_profile": "primary_plus_fallback",
+            "governed_surfaces": {
+                "allowlisted_surfaces": ["mcp"],
+                "pinned_surfaces": {},
+            },
+            "workflow_surface_overrides": {},
+            "surface_version_pins": [
+                {
+                    "surface_id": "mcp",
+                    "adapter_id": "local",
+                    "workflow_class": "implementation",
+                    "operating_profile": "primary_plus_fallback",
+                    "expected_runtime_identity": "local",
+                    "expected_model_identity": "offline-vetted",
+                }
+            ],
+            "audit_content": {},
+        }
+
+        missing_summary = evaluate_surface_version_evidence(
+            {
+                "worker_id": "worker-missing",
+                "runtime_type": "local",
+                "adapter_id": "local",
+                "freshness_seconds": 5,
+            },
+            governance_policy,
+            workflow_class="implementation",
+            surface_ids=["mcp"],
+            adapter_evidence=[],
+            enforce=True,
+        )
+        self.assertFalse(missing_summary["eligible"])
+        self.assertEqual(missing_summary["blocked_surfaces"][0]["reason"], "surface_version_evidence_missing")
+
+        stale_summary = evaluate_surface_version_evidence(
+            {
+                "worker_id": "worker-stale",
+                "runtime_type": "local",
+                "adapter_id": "local",
+                "freshness_seconds": 120,
+            },
+            {
+                **governance_policy,
+                "surface_version_pins": [
+                    {
+                        "surface_id": "mcp",
+                        "adapter_id": "local",
+                        "workflow_class": "implementation",
+                        "operating_profile": "primary_plus_fallback",
+                        "expected_runtime_identity": "local",
+                    }
+                ],
+            },
+            workflow_class="implementation",
+            surface_ids=["mcp"],
+            adapter_evidence=[
+                {
+                    "name": "runtime_identity",
+                    "confidence": "high",
+                    "freshness_seconds": 120,
+                    "source_ref": "tmux:test:%1",
+                    "value": {"runtime_identity": "local"},
+                }
+            ],
+            enforce=True,
+        )
+        self.assertFalse(stale_summary["eligible"])
+        self.assertEqual(stale_summary["blocked_surfaces"][0]["reason"], "surface_version_evidence_stale")
+
+        untrusted_summary = evaluate_surface_version_evidence(
+            {
+                "worker_id": "worker-untrusted",
+                "runtime_type": "codex",
+                "adapter_id": "codex",
+                "freshness_seconds": 5,
+            },
+            {
+                **governance_policy,
+                "surface_version_pins": [
+                    {
+                        "surface_id": "mcp",
+                        "adapter_id": "codex",
+                        "workflow_class": "implementation",
+                        "operating_profile": "primary_plus_fallback",
+                        "expected_runtime_identity": "codex",
+                        "expected_model_identity": "gpt-5.4",
+                    }
+                ],
+            },
+            workflow_class="implementation",
+            surface_ids=["mcp"],
+            adapter_evidence=[
+                {
+                    "name": "permission_surface",
+                    "confidence": "low",
+                    "freshness_seconds": 5,
+                    "source_ref": "tmux:test:%1",
+                    "value": {"model": "unknown"},
+                }
+            ],
+            enforce=True,
+        )
+        self.assertFalse(untrusted_summary["eligible"])
+        self.assertEqual(untrusted_summary["blocked_surfaces"][0]["reason"], "surface_version_evidence_untrusted")
+
+    def test_surface_version_evidence_evaluation_runtime_only_pins_require_live_runtime_observation(self) -> None:
+        from tools.orchestration.policy import evaluate_surface_version_evidence
+
+        summary = evaluate_surface_version_evidence(
+            {
+                "worker_id": "worker-runtime-only",
+                "runtime_type": "codex",
+                "adapter_id": "codex",
+                "freshness_seconds": 5,
+            },
+            {
+                "policy_version": "phase1-governance-v1",
+                "operating_profile": "primary_plus_fallback",
+                "governed_surfaces": {"allowlisted_surfaces": ["mcp"], "pinned_surfaces": {}},
+                "workflow_surface_overrides": {},
+                "surface_version_pins": [
+                    {
+                        "surface_id": "mcp",
+                        "adapter_id": "codex",
+                        "workflow_class": "implementation",
+                        "operating_profile": "primary_plus_fallback",
+                        "expected_runtime_identity": "codex",
+                    }
+                ],
+                "audit_content": {},
+            },
+            workflow_class="implementation",
+            surface_ids=["mcp"],
+            adapter_evidence=[
+                {
+                    "name": "permission_surface",
+                    "confidence": "medium",
+                    "freshness_seconds": 5,
+                    "source_ref": "tmux:test:%1",
+                    "value": {"model": "gpt-5.4"},
+                }
+            ],
+            enforce=True,
+        )
+
+        self.assertFalse(summary["eligible"])
+        self.assertEqual(summary["blocked_surfaces"][0]["reason"], "surface_version_evidence_missing")
+        self.assertIsNone(summary["blocked_surfaces"][0]["observed"]["runtime_identity"])
+
+    def test_surface_version_evidence_evaluation_skips_non_matching_context_without_probe(self) -> None:
+        from tools.orchestration.policy import evaluate_surface_version_evidence
+
+        summary = evaluate_surface_version_evidence(
+            {
+                "worker_id": "worker-no-match",
+                "runtime_type": "codex",
+                "adapter_id": "codex",
+                "freshness_seconds": 5,
+            },
+            {
+                "policy_version": "phase1-governance-v1",
+                "operating_profile": "primary_plus_fallback",
+                "governed_surfaces": {"allowlisted_surfaces": ["mcp"], "pinned_surfaces": {}},
+                "workflow_surface_overrides": {},
+                "surface_version_pins": [
+                    {
+                        "surface_id": "mcp",
+                        "adapter_id": "codex",
+                        "workflow_class": "review",
+                        "operating_profile": "primary_plus_fallback",
+                        "expected_runtime_identity": "codex",
+                        "expected_model_identity": "gpt-5.4",
+                    }
+                ],
+                "audit_content": {},
+            },
+            workflow_class="implementation",
+            surface_ids=["mcp"],
+        )
+
+        self.assertTrue(summary["eligible"])
+        self.assertFalse(summary["probe_required"])
+        self.assertEqual(summary["effective_state"], "no_matching_pins")
 
     def test_setup_init_bootstraps_separate_config_domain_files(self) -> None:
         result = self.run_cli("setup", "init", "--json")
@@ -347,6 +720,165 @@ class SetupInitTests(unittest.TestCase):
         self.assertIn("./tools/tmux_bridge/snapshot.sh", compatibility["supported_unchanged_workflows"]["bridge_helpers"])
         self.assertIn("macs task create --summary <text>", compatibility["superseded_by_control_plane"]["normal_orchestration"])
 
+    def test_setup_check_reports_governance_operating_profile_snapshot_and_no_pins_in_json(self) -> None:
+        self.init_repo()
+
+        result = self.run_cli("setup", "check", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        payload = json.loads(result.stdout)
+        governance_summary = payload["data"]["configuration"]["governance_policy"]["summary"]
+        self.assertEqual(governance_summary["operating_profile"], "primary_plus_fallback")
+        self.assertTrue(governance_summary["active_snapshot"]["snapshot_id"].startswith("policy-"))
+        self.assertEqual(governance_summary["surface_version_pins"]["state"], "none_configured")
+        self.assertEqual(governance_summary["surface_version_pins"]["effective_state"], "none_configured")
+        self.assertEqual(governance_summary["surface_version_pins"]["effective_pins"], [])
+        self.assertEqual(governance_summary["secret_scopes"]["state"], "none_configured")
+        self.assertEqual(governance_summary["secret_scopes"]["effective_state"], "none_configured")
+        self.assertEqual(governance_summary["secret_scopes"]["effective_scopes"], [])
+
+    def test_setup_check_reports_effective_surface_version_pins_for_active_profile_in_json(self) -> None:
+        self.init_repo()
+
+        governance_path = self.repo_root / ".codex" / "orchestration" / "governance-policy.json"
+        governance_policy = json.loads(governance_path.read_text(encoding="utf-8"))
+        governance_policy["surface_version_pins"] = [
+            {
+                "surface_id": "mcp",
+                "adapter_id": "codex",
+                "workflow_class": "implementation",
+                "operating_profile": "primary_plus_fallback",
+                "expected_runtime_identity": "codex",
+                "expected_model_identity": "gpt-5.4",
+            },
+            {
+                "surface_id": "mcp",
+                "adapter_id": "codex",
+                "workflow_class": "review",
+                "operating_profile": "full_hybrid",
+                "expected_runtime_identity": "codex",
+                "expected_model_identity": "gpt-5.3",
+            },
+        ]
+        governance_path.write_text(json.dumps(governance_policy, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        result = self.run_cli("setup", "check", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        payload = json.loads(result.stdout)
+        governance_summary = payload["data"]["configuration"]["governance_policy"]["summary"]
+        self.assertEqual(governance_summary["surface_version_pins"]["state"], "configured")
+        self.assertEqual(governance_summary["surface_version_pins"]["effective_state"], "pins_apply")
+        self.assertEqual(len(governance_summary["surface_version_pins"]["normalized_pins"]), 2)
+        self.assertEqual(len(governance_summary["surface_version_pins"]["effective_pins"]), 1)
+        self.assertEqual(
+            governance_summary["surface_version_pins"]["effective_pins"][0]["expected_model_identity"],
+            "gpt-5.4",
+        )
+
+    def test_setup_check_reports_effective_secret_scopes_for_active_profile_in_json(self) -> None:
+        self.init_repo()
+
+        governance_path = self.repo_root / ".codex" / "orchestration" / "governance-policy.json"
+        governance_policy = json.loads(governance_path.read_text(encoding="utf-8"))
+        governance_policy["secret_scopes"] = [
+            {
+                "surface_id": "mcp",
+                "adapter_id": "codex",
+                "workflow_class": "implementation",
+                "operating_profile": "primary_plus_fallback",
+                "secret_ref": "mcp.codex.token",
+                "display_name": "Codex MCP token",
+                "redaction_label": "masked",
+                "secret_value": {"inline_field_present": True},
+                "password": ["drop-this-field"],
+            },
+            {
+                "surface_id": "mcp",
+                "adapter_id": "codex",
+                "workflow_class": "implementation",
+                "operating_profile": "full_hybrid",
+                "secret_ref": "mcp.codex.hybrid",
+                "display_name": "Codex hybrid token",
+                "redaction_label": "masked",
+            },
+        ]
+        governance_path.write_text(json.dumps(governance_policy, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        result = self.run_cli("setup", "check", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        payload = json.loads(result.stdout)
+        governance_summary = payload["data"]["configuration"]["governance_policy"]["summary"]
+        self.assertEqual(governance_summary["secret_scopes"]["state"], "configured")
+        self.assertEqual(governance_summary["secret_scopes"]["effective_state"], "scopes_apply")
+        self.assertEqual(len(governance_summary["secret_scopes"]["normalized_scopes"]), 2)
+        self.assertEqual(len(governance_summary["secret_scopes"]["effective_scopes"]), 1)
+        scope = governance_summary["secret_scopes"]["effective_scopes"][0]
+        self.assertEqual(scope["secret_ref"], "mcp.codex.token")
+        self.assertEqual(scope["display_name"], "Codex MCP token")
+        self.assertEqual(scope["redaction_label"], "masked")
+        self.assertNotIn("secret_value", scope)
+        sanitized_policy = json.loads(governance_path.read_text(encoding="utf-8"))
+        self.assertNotIn("secret_value", sanitized_policy["secret_scopes"][0])
+        self.assertNotIn("password", sanitized_policy["secret_scopes"][0])
+
+        human_result = self.run_cli("setup", "check")
+        self.assertEqual(human_result.returncode, 0, human_result.stderr)
+        self.assertIn("Secret scopes:", human_result.stdout)
+        self.assertIn("mcp.codex.token", human_result.stdout)
+        self.assertNotIn("secret_value", human_result.stdout)
+
+    def test_setup_check_reports_stale_governance_snapshot_after_post_bootstrap_policy_edit(self) -> None:
+        self.init_repo()
+
+        governance_path = self.repo_root / ".codex" / "orchestration" / "governance-policy.json"
+        governance_policy = json.loads(governance_path.read_text(encoding="utf-8"))
+        governance_policy["surface_version_pins"] = [
+            {
+                "surface_id": "mcp",
+                "adapter_id": "codex",
+                "workflow_class": "implementation",
+                "operating_profile": "primary_plus_fallback",
+                "expected_runtime_identity": "codex",
+                "expected_model_identity": "gpt-5.4",
+            }
+        ]
+        governance_policy["secret_scopes"] = [
+            {
+                "surface_id": "mcp",
+                "adapter_id": "codex",
+                "workflow_class": "implementation",
+                "operating_profile": "primary_plus_fallback",
+                "secret_ref": "mcp.codex.token",
+                "display_name": "Codex MCP token",
+                "redaction_label": "masked",
+                "secret_value": {"inline_field_present": True},
+            }
+        ]
+        governance_path.write_text(json.dumps(governance_policy, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        result = self.run_cli("setup", "check", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        payload = json.loads(result.stdout)
+        governance_summary = payload["data"]["configuration"]["governance_policy"]["summary"]
+        active_snapshot = governance_summary["active_snapshot"]
+        self.assertEqual(active_snapshot["traceability_status"], "stale_vs_live_policy")
+        self.assertFalse(active_snapshot["matches_live_policy"])
+        self.assertEqual(active_snapshot["surface_version_pins"]["state"], "none_configured")
+        self.assertEqual(active_snapshot["surface_version_pins"]["effective_state"], "none_configured")
+        self.assertEqual(governance_summary["surface_version_pins"]["effective_state"], "pins_apply")
+        self.assertEqual(active_snapshot["secret_scopes"]["state"], "none_configured")
+        self.assertEqual(active_snapshot["secret_scopes"]["effective_state"], "none_configured")
+        self.assertEqual(governance_summary["secret_scopes"]["effective_state"], "scopes_apply")
+
+        human_result = self.run_cli("setup", "check")
+        self.assertEqual(human_result.returncode, 0, human_result.stderr)
+        self.assertIn("stale relative to live governance policy", human_result.stdout)
+        self.assertIn("Snapshot-captured surface version pins: none configured", human_result.stdout)
+        self.assertIn("Snapshot-captured secret scopes: none configured", human_result.stdout)
+
     def test_setup_check_human_readable_lists_config_domains(self) -> None:
         self.init_repo()
 
@@ -365,6 +897,17 @@ class SetupInitTests(unittest.TestCase):
         self.assertIn("Single-worker mode: supported", result.stdout)
         self.assertIn("tools/tmux_bridge/target_pane.txt", result.stdout)
         self.assertIn("Superseded by controller-owned commands:", result.stdout)
+
+    def test_setup_check_human_readable_reports_governance_profile_snapshot_and_no_pins(self) -> None:
+        self.init_repo()
+
+        result = self.run_cli("setup", "check")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        self.assertIn("Active operating profile: primary_plus_fallback", result.stdout)
+        self.assertIn("Governance snapshot:", result.stdout)
+        self.assertIn("Surface version pins: none configured", result.stdout)
+        self.assertIn("Secret scopes: none configured", result.stdout)
 
     def test_setup_validate_blocks_before_bootstrap(self) -> None:
         result = self.run_cli("setup", "validate", "--json")
@@ -412,6 +955,103 @@ class SetupInitTests(unittest.TestCase):
         self.assertIn("No repo-local state migration is required.", result.stdout)
         self.assertIn("Legacy metadata:", result.stdout)
         self.assertIn("tools/tmux_bridge/target_pane.txt", result.stdout)
+
+    def test_setup_help_lists_guide_verb(self) -> None:
+        result = self.run_cli("setup", "--help")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        self.assertIn("guide", result.stdout)
+
+    def test_setup_guide_is_read_only_and_succeeds_before_bootstrap(self) -> None:
+        result = self.run_cli("setup", "guide", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["command"], "macs setup guide")
+
+        guide = payload["data"]["guide"]
+        self.assertTrue(guide["read_only"])
+        self.assertFalse(guide["bootstrap_detected"])
+        self.assertEqual(guide["current_phase"], "bootstrap-required")
+        self.assertEqual(guide["next_action"]["command"], "macs setup init")
+        self.assertEqual(guide["next_action"]["action_type"], "ACTION")
+        self.assertIn("macs setup dry-run --json", [item["command"] for item in guide["follow_up_commands"]])
+        self.assertFalse((self.repo_root / ".codex" / "orchestration").exists())
+
+    def test_setup_guide_human_readable_labels_commands(self) -> None:
+        result = self.run_cli("setup", "guide")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        self.assertIn("Guided setup briefing:", result.stdout)
+        self.assertIn("[ACTION] macs setup init", result.stdout)
+        self.assertIn("[READ-ONLY] macs setup dry-run --json", result.stdout)
+
+    def test_setup_guide_uses_discover_as_next_action_for_registered_but_not_ready_workers(self) -> None:
+        self.init_repo()
+        adapter_settings_path = self.repo_root / ".codex" / "orchestration" / "adapter-settings.json"
+        settings = json.loads(adapter_settings_path.read_text(encoding="utf-8"))
+        settings["adapters"]["claude"]["enabled"] = False
+        settings["adapters"]["gemini"]["enabled"] = False
+        settings["adapters"]["local"]["enabled"] = False
+        adapter_settings_path.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        self.seed_worker_row(
+            worker_id="worker-codex-degraded",
+            runtime_type="codex",
+            adapter_id="codex",
+            state="degraded",
+        )
+        fake_bin = self.make_fake_bin("python3", "tmux", "codex")
+
+        result = self.run_cli(
+            "setup",
+            "guide",
+            "--json",
+            env_overrides={"PATH": fake_bin},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        payload = json.loads(result.stdout)
+        guide = payload["data"]["guide"]
+        self.assertTrue(guide["bootstrap_detected"])
+        self.assertEqual(guide["current_phase"], "validate-readiness")
+        self.assertEqual(guide["current_state"]["outcome"], "PARTIAL")
+        self.assertEqual(guide["current_state"]["registered_workers"], 1)
+        self.assertEqual(guide["current_state"]["ready_workers"], 0)
+        self.assertEqual(guide["next_action"]["command"], "macs worker discover --json")
+        self.assertEqual(guide["next_action"]["action_type"], "ACTION")
+        self.assertIn("macs setup validate --json", [item["command"] for item in guide["follow_up_commands"]])
+
+    def test_setup_guide_reports_ready_phase_after_bootstrap(self) -> None:
+        self.init_repo()
+        adapter_settings_path = self.repo_root / ".codex" / "orchestration" / "adapter-settings.json"
+        settings = json.loads(adapter_settings_path.read_text(encoding="utf-8"))
+        settings["adapters"]["claude"]["enabled"] = False
+        settings["adapters"]["gemini"]["enabled"] = False
+        adapter_settings_path.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        self.seed_worker_row(worker_id="worker-codex-ready", runtime_type="codex", adapter_id="codex")
+        self.seed_worker_row(worker_id="worker-local-ready", runtime_type="local", adapter_id="local")
+        fake_bin = self.make_fake_bin("python3", "tmux", "codex")
+
+        result = self.run_cli(
+            "setup",
+            "guide",
+            "--json",
+            env_overrides={"PATH": fake_bin},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        payload = json.loads(result.stdout)
+        guide = payload["data"]["guide"]
+        self.assertTrue(guide["bootstrap_detected"])
+        self.assertEqual(guide["current_phase"], "ready")
+        self.assertEqual(guide["current_state"]["outcome"], "PASS")
+        self.assertTrue(guide["current_state"]["safe_ready_state"])
+        self.assertEqual(guide["current_state"]["ready_workers"], 2)
+        self.assertEqual(guide["next_action"]["command"], "macs setup validate --json")
+        self.assertIn("macs setup check --json", [item["command"] for item in guide["follow_up_commands"]])
 
     def test_setup_validate_reports_partial_outcome_when_bootstrapped_but_not_ready(self) -> None:
         self.init_repo()
@@ -2037,6 +2677,90 @@ class SetupInitTests(unittest.TestCase):
         self.assertEqual(inspect_payload["worker"]["adapter_id"], "local")
         self.assertEqual(inspect_payload["worker"]["state"], "ready")
 
+    def test_worker_register_quarantines_surface_version_pin_mismatch_and_records_audit_context(self) -> None:
+        self.init_repo()
+        self.update_governance_policy(
+            lambda policy: {
+                **policy,
+                "governed_surfaces": {
+                    **policy["governed_surfaces"],
+                    "allowlisted_surfaces": ["mcp"],
+                },
+                "surface_version_pins": [
+                    {
+                        "surface_id": "mcp",
+                        "adapter_id": "codex",
+                        "workflow_class": "*",
+                        "operating_profile": "primary_plus_fallback",
+                        "expected_runtime_identity": "codex",
+                        "expected_model_identity": "gpt-5.4",
+                    }
+                ],
+            }
+        )
+        tmux_socket, tmux_session, tmux_pane = self.start_tmux_worker("register-version-mismatch")
+        self.stage_tmux_capture(
+            tmux_socket,
+            tmux_pane,
+            "codex --model gpt-5.4-mini --sandbox workspace-write --yolo",
+        )
+        self.seed_worker_row(
+            worker_id="worker-codex-register-version-mismatch",
+            runtime_type="codex",
+            adapter_id="local",
+            state="registered",
+            capabilities=["implementation"],
+            operator_tags=["discovered", "surface:mcp"],
+            tmux_socket=tmux_socket,
+            tmux_session=tmux_session,
+            tmux_pane=tmux_pane,
+        )
+
+        result = self.run_cli(
+            "worker",
+            "register",
+            "--worker",
+            "worker-codex-register-version-mismatch",
+            "--adapter",
+            "codex",
+            "--json",
+        )
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertIn("quarantined during registration", payload["error"]["message"])
+        self.assertIn("retry registration", payload["error"]["next_action"])
+        self.assertEqual(payload["error"]["worker"]["state"], "quarantined")
+        blocked = payload["error"]["governance"]["surface_version_pins"]["blocked_surfaces"][0]
+        self.assertEqual(blocked["reason"], "surface_version_pin_mismatch")
+        self.assertEqual(blocked["observed"]["model_identity"]["identity"], "gpt-5.4-mini")
+
+        state_db = self.repo_root / ".codex" / "orchestration" / "state.db"
+        conn = sqlite3.connect(state_db)
+        try:
+            event_row = conn.execute(
+                """
+                SELECT event_type, payload
+                FROM events
+                WHERE aggregate_id = ?
+                ORDER BY timestamp DESC, event_id DESC
+                LIMIT 1
+                """,
+                ("worker-codex-register-version-mismatch",),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        self.assertIsNotNone(event_row)
+        self.assertEqual(event_row[0], "worker.quarantined")
+        event_payload = json.loads(event_row[1])
+        self.assertEqual(event_payload["state"], "quarantined")
+        self.assertEqual(
+            event_payload["governance"]["surface_version_pins"]["blocked_surfaces"][0]["reason"],
+            "surface_version_pin_mismatch",
+        )
+
     def test_manual_disable_survives_health_reclassification_reads(self) -> None:
         self.run_cli("setup", "init")
         orchestration_dir = self.repo_root / ".codex" / "orchestration"
@@ -2233,10 +2957,10 @@ class SetupInitTests(unittest.TestCase):
 
         self.assertEqual(worker["runtime"], "local")
         self.assertGreaterEqual(worker["freshness_seconds"], 0)
-        self.assertEqual([item["adapter_id"] for item in evidence], ["local", "local", "local"])
+        self.assertEqual([item["adapter_id"] for item in evidence], ["local", "local", "local", "local"])
         self.assertEqual(
             [item["name"] for item in evidence],
-            ["pane_presence", "capability_decl", "health_state"],
+            ["pane_presence", "runtime_identity", "capability_decl", "health_state"],
         )
         self.assertTrue(all("freshness_seconds" in item for item in evidence))
         self.assertTrue(all("source_ref" in item for item in evidence))
@@ -2432,7 +3156,7 @@ class SetupInitTests(unittest.TestCase):
             self.assertEqual(probe_payload["data"]["worker"]["adapter_id"], adapter_id)
             self.assertEqual(
                 [item["name"] for item in probe_payload["data"]["evidence"]],
-                ["pane_presence", "capability_decl", "health_state"],
+                ["pane_presence", "runtime_identity", "capability_decl", "health_state"],
             )
 
     def test_task_assign_records_routing_decision_and_locks(self) -> None:

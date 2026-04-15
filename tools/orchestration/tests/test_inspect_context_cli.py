@@ -60,6 +60,51 @@ class InspectContextCliContractTests(unittest.TestCase):
         result = self.run_cli("setup", "init")
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def run_git(self, *args: str) -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(
+                ["git", *args],
+                cwd=self.repo_root,
+                env=self.env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError:
+            self.skipTest("git not available")
+
+    def init_git_repo(self) -> None:
+        init_result = self.run_git("init")
+        self.assertEqual(init_result.returncode, 0, init_result.stdout + init_result.stderr)
+        self.assertEqual(self.run_git("config", "user.email", "inspect@example.test").returncode, 0)
+        self.assertEqual(self.run_git("config", "user.name", "Inspect Test").returncode, 0)
+        (self.repo_root / ".gitignore").write_text(".codex/\n", encoding="utf-8")
+        (self.repo_root / "README.md").write_text("baseline\n", encoding="utf-8")
+        add_result = self.run_git("add", ".gitignore", "README.md")
+        self.assertEqual(add_result.returncode, 0, add_result.stdout + add_result.stderr)
+        commit_result = self.run_git("commit", "-m", "Initial commit")
+        self.assertEqual(commit_result.returncode, 0, commit_result.stdout + commit_result.stderr)
+
+    def create_checkpointable_repo_changes(self) -> None:
+        readme_path = self.repo_root / "README.md"
+        readme_path.write_text(readme_path.read_text(encoding="utf-8") + "inspect checkpoint change\n", encoding="utf-8")
+        docs_dir = self.repo_root / "docs"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        (docs_dir / "inspect-checkpoint.md").write_text("inspect checkpoint context\n", encoding="utf-8")
+
+    def seed_completed_task(self) -> str:
+        create_result = self.run_cli("task", "create", "--summary", "Inspect archived task context", "--json")
+        self.assertEqual(create_result.returncode, 0, create_result.stderr)
+        task_id = json.loads(create_result.stdout)["data"]["result"]["task"]["task_id"]
+        state_db = self.repo_root / ".codex" / "orchestration" / "state.db"
+        conn = sqlite3.connect(state_db)
+        try:
+            conn.execute("UPDATE tasks SET state = 'completed' WHERE task_id = ?", (task_id,))
+            conn.commit()
+        finally:
+            conn.close()
+        return task_id
+
     def seed_worker_row(
         self,
         *,
@@ -108,6 +153,80 @@ class InspectContextCliContractTests(unittest.TestCase):
     def read_target_pane(self) -> str:
         return (self.repo_root / ".codex" / "target-pane.txt").read_text(encoding="utf-8").strip()
 
+    def update_governance_policy(self, mutator) -> dict[str, object]:
+        governance_path = self.repo_root / ".codex" / "orchestration" / "governance-policy.json"
+        governance_policy = json.loads(governance_path.read_text(encoding="utf-8"))
+        updated = mutator(governance_policy)
+        governance_path.write_text(json.dumps(updated, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return updated
+
+    def configure_secret_scopes(
+        self,
+        scopes: list[dict[str, object]],
+        *,
+        allowlisted_surfaces: list[str] | None = None,
+    ) -> dict[str, object]:
+        surfaces = allowlisted_surfaces or sorted(
+            {
+                str(scope["surface_id"])
+                for scope in scopes
+                if isinstance(scope, dict) and scope.get("surface_id")
+            }
+        )
+        return self.update_governance_policy(
+            lambda policy: {
+                **policy,
+                "governed_surfaces": {
+                    **policy["governed_surfaces"],
+                    "allowlisted_surfaces": sorted(
+                        set(policy["governed_surfaces"].get("allowlisted_surfaces", [])) | set(surfaces)
+                    ),
+                },
+                "secret_scopes": scopes,
+            }
+        )
+
+    def configure_surface_version_pin(
+        self,
+        *,
+        surface_id: str = "mcp",
+        adapter_id: str,
+        workflow_class: str = "implementation",
+        expected_runtime_identity: str | None = None,
+        expected_model_identity: str | None = None,
+    ) -> dict[str, object]:
+        pin = {
+            "surface_id": surface_id,
+            "adapter_id": adapter_id,
+            "workflow_class": workflow_class,
+            "operating_profile": "primary_plus_fallback",
+        }
+        if expected_runtime_identity is not None:
+            pin["expected_runtime_identity"] = expected_runtime_identity
+        if expected_model_identity is not None:
+            pin["expected_model_identity"] = expected_model_identity
+        return self.update_governance_policy(
+            lambda policy: {
+                **policy,
+                "governed_surfaces": {
+                    **policy["governed_surfaces"],
+                    "allowlisted_surfaces": sorted(
+                        set(policy["governed_surfaces"].get("allowlisted_surfaces", [])) | {surface_id}
+                    ),
+                },
+                "surface_version_pins": [pin],
+            }
+        )
+
+    def write_worker_env(self, values: dict[str, str]) -> Path:
+        env_path = self.repo_root / ".codex" / "tmux-worker.env"
+        env_path.parent.mkdir(parents=True, exist_ok=True)
+        env_path.write_text(
+            "\n".join(f"{key}={json.dumps(value)}" for key, value in sorted(values.items())) + "\n",
+            encoding="utf-8",
+        )
+        return env_path
+
     def create_tmux_session(self, socket: Path, session: str, *, window_name: str) -> str:
         subprocess.run(
             ["tmux", "-S", str(socket), "new-session", "-d", "-s", session, "-n", window_name],
@@ -124,6 +243,16 @@ class InspectContextCliContractTests(unittest.TestCase):
         pane_id = pane_result.stdout.strip().splitlines()[0]
         self.assertTrue(pane_id)
         return pane_id
+
+    def stage_tmux_capture(self, socket: Path, pane_id: str, content: str) -> None:
+        if not content:
+            return
+        subprocess.run(
+            ["tmux", "-S", str(socket), "send-keys", "-t", pane_id, "-l", content],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
     def run_cli_in_tmux(self, socket: Path, session: str, *args: str) -> subprocess.CompletedProcess[str]:
         stdout_path = self.temp_dir / f"{session}-stdout.txt"
@@ -156,6 +285,151 @@ class InspectContextCliContractTests(unittest.TestCase):
             stdout=stdout_path.read_text(encoding="utf-8") if stdout_path.exists() else "",
             stderr=stderr_path.read_text(encoding="utf-8") if stderr_path.exists() else "",
         )
+
+    def assign_secret_backed_task(self) -> tuple[str, str, str]:
+        if shutil.which("tmux") is None:
+            self.skipTest("tmux not available")
+
+        self.init_repo()
+        runtime_secret = os.urandom(8).hex()
+        self.write_worker_env({"MCP_CODEX_TOKEN": runtime_secret})
+        self.configure_secret_scopes(
+            [
+                {
+                    "surface_id": "mcp",
+                    "adapter_id": "codex",
+                    "workflow_class": "implementation",
+                    "operating_profile": "primary_plus_fallback",
+                    "secret_ref": "mcp.codex.token",
+                    "display_name": "Codex MCP token",
+                    "redaction_label": "masked",
+                }
+            ]
+        )
+
+        socket = self.temp_dir / "secret-inspect.sock"
+        session = f"secret-inspect-{os.getpid()}"
+        pane_id = self.create_tmux_session(socket, session, window_name="codex")
+        self.addCleanup(
+            subprocess.run,
+            ["tmux", "-S", str(socket), "kill-server"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.seed_worker_row(
+            worker_id="worker-codex-secret-inspect",
+            runtime_type="codex",
+            adapter_id="codex",
+            capabilities=["implementation"],
+            operator_tags=["registered", "surface:mcp"],
+            tmux_socket=str(socket),
+            tmux_session=session,
+            tmux_pane=pane_id,
+        )
+
+        create_result = self.run_cli("task", "create", "--summary", "Secret inspect slice", "--json")
+        self.assertEqual(create_result.returncode, 0, create_result.stderr)
+        task_id = json.loads(create_result.stdout)["data"]["result"]["task"]["task_id"]
+
+        assign_result = self.run_cli("task", "assign", "--task", task_id, "--json")
+        self.assertEqual(assign_result.returncode, 0, assign_result.stdout + assign_result.stderr)
+        event_id = json.loads(assign_result.stdout)["data"]["event"]["event_id"]
+        return task_id, event_id, runtime_secret
+
+    def seed_governed_task_context(self, *, close_task: bool = False) -> dict[str, str]:
+        if shutil.which("tmux") is None:
+            self.skipTest("tmux not available")
+
+        self.init_repo()
+        self.init_git_repo()
+        runtime_secret = os.urandom(8).hex()
+        self.write_worker_env({"MCP_CODEX_TOKEN": runtime_secret})
+        self.configure_secret_scopes(
+            [
+                {
+                    "surface_id": "mcp",
+                    "adapter_id": "codex",
+                    "workflow_class": "implementation",
+                    "operating_profile": "primary_plus_fallback",
+                    "secret_ref": "mcp.codex.token",
+                    "display_name": "Codex MCP token",
+                    "redaction_label": "masked",
+                }
+            ]
+        )
+        self.configure_surface_version_pin(
+            adapter_id="codex",
+            expected_runtime_identity="codex",
+            expected_model_identity="gpt-5.4",
+        )
+
+        socket = self.temp_dir / "governed-inspect.sock"
+        session = f"governed-inspect-{os.getpid()}"
+        pane_id = self.create_tmux_session(socket, session, window_name="codex")
+        self.addCleanup(
+            subprocess.run,
+            ["tmux", "-S", str(socket), "kill-server"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.stage_tmux_capture(socket, pane_id, "codex --model gpt-5.4 --sandbox workspace-write --yolo")
+        self.seed_worker_row(
+            worker_id="worker-codex-governed-inspect",
+            runtime_type="codex",
+            adapter_id="codex",
+            capabilities=["implementation"],
+            operator_tags=["registered", "surface:mcp"],
+            tmux_socket=str(socket),
+            tmux_session=session,
+            tmux_pane=pane_id,
+        )
+
+        create_result = self.run_cli("task", "create", "--summary", "Governed inspect slice", "--json")
+        self.assertEqual(create_result.returncode, 0, create_result.stderr)
+        task_id = json.loads(create_result.stdout)["data"]["result"]["task"]["task_id"]
+
+        assign_result = self.run_cli("task", "assign", "--task", task_id, "--json")
+        self.assertEqual(assign_result.returncode, 0, assign_result.stdout + assign_result.stderr)
+        assign_payload = json.loads(assign_result.stdout)
+
+        self.create_checkpointable_repo_changes()
+        checkpoint_result = self.run_cli(
+            "task",
+            "checkpoint",
+            "--task",
+            task_id,
+            "--target-action",
+            "task.close",
+            "--json",
+            env_overrides={"MACS_OPERATOR_ID": "operator.governance@example.test"},
+        )
+        self.assertEqual(checkpoint_result.returncode, 0, checkpoint_result.stdout + checkpoint_result.stderr)
+        checkpoint_payload = json.loads(checkpoint_result.stdout)
+
+        scenario = {
+            "task_id": task_id,
+            "assign_event_id": assign_payload["data"]["event"]["event_id"],
+            "checkpoint_event_id": checkpoint_payload["data"]["event"]["event_id"],
+            "checkpoint_id": checkpoint_payload["data"]["result"]["checkpoint_id"],
+            "runtime_secret": runtime_secret,
+        }
+
+        if close_task:
+            close_result = self.run_cli(
+                "task",
+                "close",
+                "--task",
+                task_id,
+                "--json",
+                env_overrides={"MACS_OPERATOR_ID": "operator.governance@example.test"},
+            )
+            self.assertEqual(close_result.returncode, 0, close_result.stdout + close_result.stderr)
+            close_payload = json.loads(close_result.stdout)
+            scenario["close_event_id"] = close_payload["data"]["event"]["event_id"]
+            scenario["decision_event_id"] = close_payload["data"]["result"]["decision_event_id"]
+        return scenario
 
     def seed_degraded_worker_context(
         self,
@@ -926,6 +1200,65 @@ class InspectContextCliContractTests(unittest.TestCase):
         self.assertEqual(adapter_evidence[0]["kind"], "fact")
         self.assertEqual(adapter_evidence[0]["name"], "pane_presence")
 
+    def test_worker_inspect_surfaces_surface_version_mismatch_details_in_json_and_human_output(self) -> None:
+        self.init_repo()
+        tmux_dir = self.temp_dir / "tmux-inspect-version"
+        tmux_dir.mkdir(exist_ok=True)
+        socket = tmux_dir / "inspect-version.sock"
+        session = f"macs-inspect-version-{os.getpid()}"
+        pane_id = self.create_tmux_session(socket, session, window_name="codex-worker")
+        self.addCleanup(
+            subprocess.run,
+            ["tmux", "-S", str(socket), "kill-server"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.stage_tmux_capture(socket, pane_id, "codex --model gpt-5.4-mini --sandbox workspace-write --yolo")
+        self.update_governance_policy(
+            lambda policy: {
+                **policy,
+                "governed_surfaces": {
+                    **policy["governed_surfaces"],
+                    "allowlisted_surfaces": ["mcp"],
+                },
+                "surface_version_pins": [
+                    {
+                        "surface_id": "mcp",
+                        "adapter_id": "codex",
+                        "workflow_class": "implementation",
+                        "operating_profile": "primary_plus_fallback",
+                        "expected_runtime_identity": "codex",
+                        "expected_model_identity": "gpt-5.4",
+                    }
+                ],
+            }
+        )
+        self.seed_worker_row(
+            worker_id="worker-codex-inspect-version",
+            runtime_type="codex",
+            adapter_id="codex",
+            capabilities=["implementation"],
+            operator_tags=["registered", "surface:mcp"],
+            tmux_socket=str(socket),
+            tmux_session=session,
+            tmux_pane=pane_id,
+        )
+
+        result = self.run_cli("worker", "inspect", "--worker", "worker-codex-inspect-version", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        blocked = payload["worker"]["governance"]["surface_version_pins"]["blocked_surfaces"][0]
+        self.assertEqual(blocked["reason"], "surface_version_pin_mismatch")
+        self.assertEqual(blocked["selector_context"]["surface_id"], "mcp")
+        self.assertEqual(blocked["observed"]["model_identity"]["identity"], "gpt-5.4-mini")
+
+        human_result = self.run_cli("worker", "inspect", "--worker", "worker-codex-inspect-version")
+        self.assertEqual(human_result.returncode, 0, human_result.stderr)
+        self.assertIn("Surface Version Enforcement:", human_result.stdout)
+        self.assertIn("blocked surface_version_pin_mismatch", human_result.stdout)
+        self.assertIn("observed=runtime=codex model=gpt-5.4-mini", human_result.stdout)
+
     def test_task_inspect_json_surfaces_degraded_owner_context_and_frozen_envelope(self) -> None:
         self.init_repo()
         worker_id, task_id, lease_id = self.seed_degraded_worker_context()
@@ -1053,6 +1386,48 @@ class InspectContextCliContractTests(unittest.TestCase):
         self.assertIn("- fact pane_presence", output)
         self.assertLess(output.index("Controller Truth:"), output.index("Adapter Evidence:"))
 
+    def test_task_inspect_surfaces_recent_checkpoint_refs_without_raw_file_browsing(self) -> None:
+        self.init_repo()
+        self.init_git_repo()
+        create_result = self.run_cli("task", "create", "--summary", "Checkpoint inspect slice", "--json")
+        self.assertEqual(create_result.returncode, 0, create_result.stderr)
+        task_id = json.loads(create_result.stdout)["data"]["result"]["task"]["task_id"]
+        self.create_checkpointable_repo_changes()
+
+        checkpoint_result = self.run_cli(
+            "task",
+            "checkpoint",
+            "--task",
+            task_id,
+            "--target-action",
+            "task.close",
+            "--json",
+            env_overrides={"MACS_OPERATOR_ID": "operator.checkpoint@example.test"},
+        )
+        self.assertEqual(checkpoint_result.returncode, 0, checkpoint_result.stdout + checkpoint_result.stderr)
+        checkpoint_payload = json.loads(checkpoint_result.stdout)
+        checkpoint_id = checkpoint_payload["data"]["result"]["checkpoint_id"]
+
+        json_result = self.run_cli("task", "inspect", "--task", task_id, "--json")
+        self.assertEqual(json_result.returncode, 0, json_result.stderr)
+        payload = json.loads(json_result.stdout)
+
+        recent_checkpoints = payload["task"]["controller_truth"]["recent_checkpoint_refs"]
+        self.assertEqual(recent_checkpoints[0]["checkpoint_id"], checkpoint_id)
+        self.assertEqual(recent_checkpoints[0]["target_action"], "task.close")
+        self.assertEqual(recent_checkpoints[0]["actor_id"], "operator.checkpoint@example.test")
+        self.assertIn("bundle_dir", recent_checkpoints[0]["evidence_refs"])
+        self.assertEqual(recent_checkpoints[0]["baseline_fingerprint"]["head"]["state"], "attached")
+        self.assertGreaterEqual(len(recent_checkpoints[0]["baseline_fingerprint"]["affected_paths"]), 1)
+
+        human_result = self.run_cli("task", "inspect", "--task", task_id)
+        self.assertEqual(human_result.returncode, 0, human_result.stderr)
+        self.assertIn("Recent Checkpoints:", human_result.stdout)
+        self.assertIn(checkpoint_id, human_result.stdout)
+        self.assertIn("task.close", human_result.stdout)
+        self.assertIn("actor=operator.checkpoint@example.test", human_result.stdout)
+        self.assertIn("bundle_dir=.codex/orchestration/checkpoints/", human_result.stdout)
+
     def test_task_inspect_json_surfaces_paused_state_intervention_basis_and_runtime_warning(self) -> None:
         self.init_repo()
         worker_id, task_id, lease_id = self.seed_paused_task_context()
@@ -1103,6 +1478,283 @@ class InspectContextCliContractTests(unittest.TestCase):
         self.assertIn("Intervention Rationale: operator requested a safe in-place pause", output)
         self.assertIn("Affected Refs: task=task-inspect-paused lease=lease-inspect-paused worker=worker-local-paused", output)
 
+    def test_event_inspect_surfaces_checkpoint_target_action_and_artifact_linkage(self) -> None:
+        self.init_repo()
+        self.init_git_repo()
+        create_result = self.run_cli("task", "create", "--summary", "Checkpoint event inspect slice", "--json")
+        self.assertEqual(create_result.returncode, 0, create_result.stderr)
+        task_id = json.loads(create_result.stdout)["data"]["result"]["task"]["task_id"]
+        self.create_checkpointable_repo_changes()
+
+        checkpoint_result = self.run_cli(
+            "task",
+            "checkpoint",
+            "--task",
+            task_id,
+            "--target-action",
+            "task.archive",
+            "--json",
+            env_overrides={"MACS_OPERATOR_ID": "operator.checkpoint@example.test"},
+        )
+        self.assertEqual(checkpoint_result.returncode, 0, checkpoint_result.stdout + checkpoint_result.stderr)
+        event_id = json.loads(checkpoint_result.stdout)["data"]["event"]["event_id"]
+
+        json_result = self.run_cli("event", "inspect", "--event", event_id, "--json")
+        self.assertEqual(json_result.returncode, 0, json_result.stderr)
+        payload = json.loads(json_result.stdout)
+
+        event = payload["data"]["event"]
+        checkpoint = payload["data"]["checkpoint"]
+        self.assertEqual(event["event_type"], "review.checkpoint_recorded")
+        self.assertEqual(event["actor_id"], "operator.checkpoint@example.test")
+        self.assertEqual(event["target_action"], "task.archive")
+        self.assertEqual(checkpoint["checkpoint_id"], event["checkpoint_id"])
+        self.assertEqual(checkpoint["target_action"], "task.archive")
+        self.assertIn("bundle_dir", checkpoint["evidence_refs"])
+        self.assertEqual(checkpoint["baseline_fingerprint"]["head"]["state"], "attached")
+
+        human_result = self.run_cli("event", "inspect", "--event", event_id)
+        self.assertEqual(human_result.returncode, 0, human_result.stderr)
+        self.assertIn(f"Event: {event_id}", human_result.stdout)
+        self.assertIn("Actor: operator operator.checkpoint@example.test", human_result.stdout)
+        self.assertIn("Checkpoint: checkpoint-", human_result.stdout)
+        self.assertIn("Target Action: task.archive", human_result.stdout)
+        self.assertIn("Baseline Repo: head_state=attached", human_result.stdout)
+        self.assertIn("Evidence Refs: bundle_dir=.codex/orchestration/checkpoints/", human_result.stdout)
+
+    def test_event_inspect_traces_gated_archive_to_checkpoint_and_decision_event(self) -> None:
+        self.init_repo()
+        self.init_git_repo()
+        task_id = self.seed_completed_task()
+        self.create_checkpointable_repo_changes()
+
+        checkpoint_result = self.run_cli(
+            "task",
+            "checkpoint",
+            "--task",
+            task_id,
+            "--target-action",
+            "task.archive",
+            "--json",
+            env_overrides={"MACS_OPERATOR_ID": "operator.checkpoint@example.test"},
+        )
+        self.assertEqual(checkpoint_result.returncode, 0, checkpoint_result.stdout + checkpoint_result.stderr)
+        checkpoint_id = json.loads(checkpoint_result.stdout)["data"]["result"]["checkpoint_id"]
+
+        archive_result = self.run_cli(
+            "task",
+            "archive",
+            "--task",
+            task_id,
+            "--json",
+            env_overrides={"MACS_OPERATOR_ID": "operator.checkpoint@example.test"},
+        )
+        self.assertEqual(archive_result.returncode, 0, archive_result.stdout + archive_result.stderr)
+        archive_payload = json.loads(archive_result.stdout)
+        event_id = archive_payload["data"]["event"]["event_id"]
+        decision_event_id = archive_payload["data"]["result"]["decision_event_id"]
+
+        json_result = self.run_cli("event", "inspect", "--event", event_id, "--json")
+        self.assertEqual(json_result.returncode, 0, json_result.stderr)
+        payload = json.loads(json_result.stdout)
+
+        self.assertEqual(payload["data"]["event"]["event_type"], "task.archived")
+        self.assertEqual(payload["data"]["event"]["checkpoint_id"], checkpoint_id)
+        self.assertEqual(payload["data"]["event"]["decision_event_id"], decision_event_id)
+        self.assertEqual(payload["data"]["checkpoint"]["checkpoint_id"], checkpoint_id)
+        self.assertEqual(payload["data"]["checkpoint"]["target_action"], "task.archive")
+        self.assertEqual(payload["data"]["decision_event"]["event_id"], decision_event_id)
+        self.assertEqual(payload["data"]["decision_event"]["actor_id"], "operator.checkpoint@example.test")
+        self.assertEqual(payload["data"]["decision_event"]["checkpoint_id"], checkpoint_id)
+
+        human_result = self.run_cli("event", "inspect", "--event", event_id)
+        self.assertEqual(human_result.returncode, 0, human_result.stderr)
+        self.assertIn(f"Event: {event_id}", human_result.stdout)
+        self.assertIn(f"Checkpoint: {checkpoint_id}", human_result.stdout)
+        self.assertIn(f"Decision Event: {decision_event_id}", human_result.stdout)
+        self.assertIn("Decision Actor: operator.checkpoint@example.test", human_result.stdout)
+
+    def test_task_inspect_json_surfaces_compact_governance_evidence_without_secret_leakage(self) -> None:
+        scenario = self.seed_governed_task_context()
+
+        json_result = self.run_cli("task", "inspect", "--task", scenario["task_id"], "--json")
+        self.assertEqual(json_result.returncode, 0, json_result.stderr)
+        payload = json.loads(json_result.stdout)
+
+        evidence = payload["task"]["governance_evidence"]
+        self.assertEqual(evidence["policy"]["policy_version"], "phase1-governance-v1")
+        self.assertTrue(evidence["policy"]["policy_path"].endswith("governance-policy.json"))
+        self.assertEqual(evidence["policy"]["snapshot"]["traceability_status"], "stale_vs_live_policy")
+        self.assertEqual(evidence["routing"]["selected_worker_id"], "worker-codex-governed-inspect")
+        self.assertEqual(evidence["routing"]["related_event_id"], scenario["assign_event_id"])
+
+        version_pin = evidence["version_pins"]["surface_results"][0]
+        self.assertEqual(version_pin["surface_id"], "mcp")
+        self.assertEqual(version_pin["outcome"], "matched")
+        self.assertEqual(version_pin["selector_context"]["adapter_id"], "codex")
+        self.assertEqual(version_pin["expected"]["model_identities"], ["gpt-5.4"])
+        self.assertEqual(version_pin["observed"]["model_identity"]["identity"], "gpt-5.4")
+
+        secret_scope = evidence["secret_scope"]["surface_results"][0]
+        self.assertEqual(secret_scope["surface_id"], "mcp")
+        self.assertEqual(secret_scope["outcome"], "resolved")
+        self.assertEqual(secret_scope["secret_ref"], "mcp.codex.token")
+        self.assertEqual(secret_scope["selector_context"]["workflow_class"], "implementation")
+
+        checkpoint = evidence["checkpoint"]
+        self.assertEqual(checkpoint["checkpoint_id"], scenario["checkpoint_id"])
+        self.assertEqual(checkpoint["target_action"], "task.close")
+        self.assertEqual(checkpoint["actor_id"], "operator.governance@example.test")
+        self.assertIn("head_state=attached", checkpoint["baseline_summary"])
+
+        self.assertNotIn(scenario["runtime_secret"], json.dumps(evidence, sort_keys=True))
+
+        human_result = self.run_cli("task", "inspect", "--task", scenario["task_id"])
+        self.assertEqual(human_result.returncode, 0, human_result.stderr)
+        self.assertIn("Governance Evidence:", human_result.stdout)
+        self.assertIn("Policy Traceability:", human_result.stdout)
+        self.assertIn("Version Pin Evidence:", human_result.stdout)
+        self.assertIn("Secret Scope Evidence:", human_result.stdout)
+        self.assertIn("Checkpoint Evidence:", human_result.stdout)
+        self.assertIn("mcp.codex.token", human_result.stdout)
+        self.assertNotIn(scenario["runtime_secret"], human_result.stdout)
+
+    def test_task_inspect_governance_evidence_read_leaves_governance_policy_unchanged(self) -> None:
+        scenario = self.seed_governed_task_context()
+
+        governance_path = self.repo_root / ".codex" / "orchestration" / "governance-policy.json"
+        governance_policy = json.loads(governance_path.read_text(encoding="utf-8"))
+        governance_policy["secret_scopes"][0]["secret_value"] = {"inline_field_present": True}
+        governance_policy["secret_scopes"][0]["password"] = ["keep-on-disk-for-write-side-tests"]
+        original_policy_text = json.dumps(governance_policy, indent=2, sort_keys=True) + "\n"
+        governance_path.write_text(original_policy_text, encoding="utf-8")
+
+        json_result = self.run_cli("task", "inspect", "--task", scenario["task_id"], "--json")
+        self.assertEqual(json_result.returncode, 0, json_result.stderr)
+        self.assertNotIn("secret_value", json_result.stdout)
+        self.assertNotIn("password", json_result.stdout)
+
+        self.assertEqual(governance_path.read_text(encoding="utf-8"), original_policy_text)
+
+    def test_event_inspect_surfaces_governance_evidence_and_decision_linkage_without_secret_leakage(self) -> None:
+        scenario = self.seed_governed_task_context(close_task=True)
+
+        json_result = self.run_cli("event", "inspect", "--event", scenario["close_event_id"], "--json")
+        self.assertEqual(json_result.returncode, 0, json_result.stderr)
+        payload = json.loads(json_result.stdout)
+
+        evidence = payload["data"]["governance_evidence"]
+        self.assertEqual(evidence["routing"]["selected_worker_id"], "worker-codex-governed-inspect")
+        self.assertEqual(evidence["routing"]["related_event_id"], scenario["assign_event_id"])
+        self.assertEqual(evidence["checkpoint"]["checkpoint_id"], scenario["checkpoint_id"])
+        self.assertEqual(evidence["checkpoint"]["decision_event_id"], scenario["decision_event_id"])
+        self.assertEqual(evidence["decision_event"]["event_id"], scenario["decision_event_id"])
+        self.assertEqual(evidence["version_pins"]["surface_results"][0]["observed"]["model_identity"]["identity"], "gpt-5.4")
+        self.assertEqual(evidence["secret_scope"]["surface_results"][0]["secret_ref"], "mcp.codex.token")
+        self.assertNotIn(scenario["runtime_secret"], json.dumps(payload["data"], sort_keys=True))
+
+        human_result = self.run_cli("event", "inspect", "--event", scenario["close_event_id"])
+        self.assertEqual(human_result.returncode, 0, human_result.stderr)
+        self.assertIn("Governance Evidence:", human_result.stdout)
+        self.assertIn(f"Decision Event: {scenario['decision_event_id']}", human_result.stdout)
+        self.assertIn("Version Pin Evidence:", human_result.stdout)
+        self.assertIn("Secret Scope Evidence:", human_result.stdout)
+        self.assertIn("Checkpoint Evidence:", human_result.stdout)
+        self.assertNotIn(scenario["runtime_secret"], human_result.stdout)
+
+    def test_task_inspect_surfaces_version_pin_rejection_governance_evidence(self) -> None:
+        if shutil.which("tmux") is None:
+            self.skipTest("tmux not available")
+
+        self.init_repo()
+        self.configure_surface_version_pin(
+            adapter_id="codex",
+            expected_runtime_identity="codex",
+            expected_model_identity="gpt-5.4",
+        )
+        socket = self.temp_dir / "version-mismatch-inspect.sock"
+        session = f"version-mismatch-inspect-{os.getpid()}"
+        pane_id = self.create_tmux_session(socket, session, window_name="codex")
+        self.addCleanup(
+            subprocess.run,
+            ["tmux", "-S", str(socket), "kill-server"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.stage_tmux_capture(socket, pane_id, "codex --model gpt-5.4-mini --sandbox workspace-write --yolo")
+        self.seed_worker_row(
+            worker_id="worker-codex-version-mismatch-inspect",
+            runtime_type="codex",
+            adapter_id="codex",
+            capabilities=["implementation"],
+            operator_tags=["registered", "surface:mcp"],
+            tmux_socket=str(socket),
+            tmux_session=session,
+            tmux_pane=pane_id,
+        )
+        create_result = self.run_cli("task", "create", "--summary", "Version mismatch inspect", "--json")
+        self.assertEqual(create_result.returncode, 0, create_result.stderr)
+        task_id = json.loads(create_result.stdout)["data"]["result"]["task"]["task_id"]
+
+        assign_result = self.run_cli("task", "assign", "--task", task_id, "--json")
+        self.assertEqual(assign_result.returncode, 4, assign_result.stdout + assign_result.stderr)
+
+        inspect_result = self.run_cli("task", "inspect", "--task", task_id, "--json")
+        self.assertEqual(inspect_result.returncode, 0, inspect_result.stderr)
+        payload = json.loads(inspect_result.stdout)
+
+        evidence = payload["task"]["governance_evidence"]
+        self.assertEqual(evidence["routing"]["selected_worker_id"], "none")
+        version_pin = evidence["version_pins"]["surface_results"][0]
+        self.assertEqual(version_pin["outcome"], "blocked")
+        self.assertEqual(version_pin["reason"], "surface_version_pin_mismatch")
+        self.assertEqual(version_pin["expected"]["model_identities"], ["gpt-5.4"])
+        self.assertEqual(version_pin["observed"]["model_identity"]["identity"], "gpt-5.4-mini")
+
+        human_result = self.run_cli("task", "inspect", "--task", task_id)
+        self.assertEqual(human_result.returncode, 0, human_result.stderr)
+        self.assertIn("Governance Evidence:", human_result.stdout)
+        self.assertIn("surface_version_pin_mismatch", human_result.stdout)
+        self.assertIn("gpt-5.4-mini", human_result.stdout)
+
+    def test_task_inspect_surfaces_audit_safe_secret_resolution_metadata_without_raw_values(self) -> None:
+        task_id, _, runtime_secret = self.assign_secret_backed_task()
+
+        json_result = self.run_cli("task", "inspect", "--task", task_id, "--json")
+        self.assertEqual(json_result.returncode, 0, json_result.stderr)
+        payload = json.loads(json_result.stdout)
+
+        secret_resolution = payload["task"]["secret_resolution"]
+        self.assertEqual(secret_resolution["status"], "resolved")
+        self.assertEqual(secret_resolution["resolved_secret_refs"], ["mcp.codex.token"])
+        self.assertEqual(secret_resolution["surface_summaries"][0]["selector_context"]["surface_id"], "mcp")
+        self.assertNotIn(runtime_secret, json.dumps(secret_resolution, sort_keys=True))
+
+        human_result = self.run_cli("task", "inspect", "--task", task_id)
+        self.assertEqual(human_result.returncode, 0, human_result.stderr)
+        self.assertIn("Secret Resolution: resolved", human_result.stdout)
+        self.assertIn("mcp.codex.token", human_result.stdout)
+        self.assertNotIn(runtime_secret, human_result.stdout)
+
+    def test_event_inspect_surfaces_secret_resolution_metadata_without_raw_values(self) -> None:
+        _, event_id, runtime_secret = self.assign_secret_backed_task()
+
+        json_result = self.run_cli("event", "inspect", "--event", event_id, "--json")
+        self.assertEqual(json_result.returncode, 0, json_result.stderr)
+        payload = json.loads(json_result.stdout)
+
+        secret_resolution = payload["data"]["event"]["payload"]["secret_resolution"]
+        self.assertEqual(secret_resolution["resolved_secret_refs"], ["mcp.codex.token"])
+        self.assertEqual(secret_resolution["surface_summaries"][0]["surface_id"], "mcp")
+        self.assertNotIn(runtime_secret, json.dumps(payload["data"]["event"], sort_keys=True))
+
+        human_result = self.run_cli("event", "inspect", "--event", event_id)
+        self.assertEqual(human_result.returncode, 0, human_result.stderr)
+        self.assertIn("Secret Resolution: resolved", human_result.stdout)
+        self.assertIn("mcp.codex.token", human_result.stdout)
+        self.assertNotIn(runtime_secret, human_result.stdout)
+
     def test_adapter_inspect_json_surfaces_governed_surface_policy(self) -> None:
         self.init_repo()
 
@@ -1114,6 +1766,217 @@ class InspectContextCliContractTests(unittest.TestCase):
         self.assertEqual(governance["policy_version"], "phase1-governance-v1")
         self.assertEqual(governance["declared_surfaces"][0]["surface_id"], "mcp")
         self.assertFalse(governance["declared_surfaces"][0]["allowlisted"])
+
+    def test_adapter_inspect_json_surfaces_applicable_surface_version_pin_policy(self) -> None:
+        self.init_repo()
+
+        governance_path = self.repo_root / ".codex" / "orchestration" / "governance-policy.json"
+        governance_policy = json.loads(governance_path.read_text(encoding="utf-8"))
+        governance_policy["surface_version_pins"] = [
+            {
+                "surface_id": "mcp",
+                "adapter_id": "codex",
+                "workflow_class": "implementation",
+                "operating_profile": "primary_plus_fallback",
+                "expected_runtime_identity": "codex",
+                "expected_model_identity": "gpt-5.4",
+            },
+            {
+                "surface_id": "mcp",
+                "adapter_id": "claude",
+                "workflow_class": "implementation",
+                "operating_profile": "primary_plus_fallback",
+                "expected_runtime_identity": "claude",
+                "expected_model_identity": "claude-3-7-sonnet",
+            },
+        ]
+        governance_path.write_text(json.dumps(governance_policy, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        result = self.run_cli("adapter", "inspect", "--adapter", "codex", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        payload = json.loads(result.stdout)
+        governance = payload["data"]["governance"]
+        self.assertEqual(governance["operating_profile"], "primary_plus_fallback")
+        self.assertEqual(governance["surface_version_pins"]["effective_state"], "pins_apply")
+        self.assertEqual(len(governance["surface_version_pins"]["effective_pins"]), 1)
+        self.assertEqual(governance["surface_version_pins"]["effective_pins"][0]["expected_model_identity"], "gpt-5.4")
+        self.assertEqual(
+            governance["declared_surfaces"][0]["applicable_version_pins"][0]["expected_runtime_identity"],
+            "codex",
+        )
+
+    def test_adapter_inspect_json_surfaces_applicable_secret_scope_policy(self) -> None:
+        self.init_repo()
+
+        governance_path = self.repo_root / ".codex" / "orchestration" / "governance-policy.json"
+        governance_policy = json.loads(governance_path.read_text(encoding="utf-8"))
+        governance_policy["secret_scopes"] = [
+            {
+                "surface_id": "mcp",
+                "adapter_id": "codex",
+                "workflow_class": "implementation",
+                "operating_profile": "primary_plus_fallback",
+                "secret_ref": "mcp.codex.token",
+                "display_name": "Codex MCP token",
+                "redaction_label": "masked",
+                "secret_value": {"inline_field_present": True},
+            },
+            {
+                "surface_id": "mcp",
+                "adapter_id": "claude",
+                "workflow_class": "implementation",
+                "operating_profile": "primary_plus_fallback",
+                "secret_ref": "mcp.claude.token",
+                "display_name": "Claude MCP token",
+                "redaction_label": "masked",
+            },
+        ]
+        governance_path.write_text(json.dumps(governance_policy, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        result = self.run_cli("adapter", "inspect", "--adapter", "codex", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        payload = json.loads(result.stdout)
+        governance = payload["data"]["governance"]
+        self.assertEqual(governance["secret_scopes"]["effective_state"], "scopes_apply")
+        self.assertEqual(len(governance["secret_scopes"]["effective_scopes"]), 1)
+        scope = governance["secret_scopes"]["effective_scopes"][0]
+        self.assertEqual(scope["secret_ref"], "mcp.codex.token")
+        self.assertEqual(scope["display_name"], "Codex MCP token")
+        self.assertEqual(scope["redaction_label"], "masked")
+        self.assertNotIn("secret_value", scope)
+        self.assertEqual(
+            governance["declared_surfaces"][0]["applicable_secret_scopes"][0]["secret_ref"],
+            "mcp.codex.token",
+        )
+
+        human_result = self.run_cli("adapter", "inspect", "--adapter", "codex")
+        self.assertEqual(human_result.returncode, 0, human_result.stderr)
+        self.assertIn("Secret scopes:", human_result.stdout)
+        self.assertIn("mcp.codex.token", human_result.stdout)
+        self.assertNotIn("secret_value", human_result.stdout)
+
+    def test_adapter_inspect_json_excludes_non_matching_secret_scopes_from_top_level_summary(self) -> None:
+        self.init_repo()
+
+        governance_path = self.repo_root / ".codex" / "orchestration" / "governance-policy.json"
+        governance_policy = json.loads(governance_path.read_text(encoding="utf-8"))
+        governance_policy["secret_scopes"] = [
+            {
+                "surface_id": "mcp",
+                "adapter_id": "codex",
+                "workflow_class": "implementation",
+                "operating_profile": "primary_plus_fallback",
+                "secret_ref": "mcp.codex.token",
+                "display_name": "Codex MCP token",
+                "redaction_label": "masked",
+            },
+            {
+                "surface_id": "shell",
+                "adapter_id": "codex",
+                "workflow_class": "implementation",
+                "operating_profile": "primary_plus_fallback",
+                "secret_ref": "shell.codex.token",
+                "display_name": "Codex shell token",
+                "redaction_label": "masked",
+            },
+        ]
+        governance_path.write_text(json.dumps(governance_policy, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        result = self.run_cli("adapter", "inspect", "--adapter", "codex", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        payload = json.loads(result.stdout)
+        governance = payload["data"]["governance"]
+        self.assertEqual(
+            [scope["surface_id"] for scope in governance["secret_scopes"]["normalized_scopes"]],
+            ["mcp"],
+        )
+        self.assertEqual(
+            [scope["surface_id"] for scope in governance["secret_scopes"]["effective_scopes"]],
+            ["mcp"],
+        )
+        self.assertEqual(
+            [scope["surface_id"] for scope in governance["declared_surfaces"][0]["applicable_secret_scopes"]],
+            ["mcp"],
+        )
+
+    def test_adapter_inspect_json_excludes_undeclared_surface_pins_from_top_level_summary(self) -> None:
+        self.init_repo()
+
+        governance_path = self.repo_root / ".codex" / "orchestration" / "governance-policy.json"
+        governance_policy = json.loads(governance_path.read_text(encoding="utf-8"))
+        governance_policy["surface_version_pins"] = [
+            {
+                "surface_id": "mcp",
+                "adapter_id": "codex",
+                "workflow_class": "implementation",
+                "operating_profile": "primary_plus_fallback",
+                "expected_runtime_identity": "codex",
+                "expected_model_identity": "gpt-5.4",
+            },
+            {
+                "surface_id": "shell",
+                "adapter_id": "codex",
+                "workflow_class": "implementation",
+                "operating_profile": "primary_plus_fallback",
+                "expected_runtime_identity": "codex",
+                "expected_model_identity": "gpt-5.4-mini",
+            },
+        ]
+        governance_path.write_text(json.dumps(governance_policy, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        result = self.run_cli("adapter", "inspect", "--adapter", "codex", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        payload = json.loads(result.stdout)
+        governance = payload["data"]["governance"]
+        self.assertEqual(
+            [pin["surface_id"] for pin in governance["surface_version_pins"]["normalized_pins"]],
+            ["mcp"],
+        )
+        self.assertEqual(
+            [pin["surface_id"] for pin in governance["surface_version_pins"]["effective_pins"]],
+            ["mcp"],
+        )
+        self.assertEqual(
+            [pin["surface_id"] for pin in governance["declared_surfaces"][0]["applicable_version_pins"]],
+            ["mcp"],
+        )
+
+    def test_adapter_inspect_json_reports_stale_governance_snapshot_after_post_bootstrap_policy_edit(self) -> None:
+        self.init_repo()
+
+        governance_path = self.repo_root / ".codex" / "orchestration" / "governance-policy.json"
+        governance_policy = json.loads(governance_path.read_text(encoding="utf-8"))
+        governance_policy["surface_version_pins"] = [
+            {
+                "surface_id": "mcp",
+                "adapter_id": "codex",
+                "workflow_class": "implementation",
+                "operating_profile": "primary_plus_fallback",
+                "expected_runtime_identity": "codex",
+                "expected_model_identity": "gpt-5.4",
+            }
+        ]
+        governance_path.write_text(json.dumps(governance_policy, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        result = self.run_cli("adapter", "inspect", "--adapter", "codex", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        payload = json.loads(result.stdout)
+        governance = payload["data"]["governance"]
+        active_snapshot = governance["active_snapshot"]
+        self.assertEqual(active_snapshot["traceability_status"], "stale_vs_live_policy")
+        self.assertFalse(active_snapshot["matches_live_policy"])
+        self.assertEqual(active_snapshot["surface_version_pins"]["state"], "none_configured")
+        self.assertEqual(governance["surface_version_pins"]["effective_state"], "pins_apply")
+
+        human_result = self.run_cli("adapter", "inspect", "--adapter", "codex")
+        self.assertEqual(human_result.returncode, 0, human_result.stderr)
+        self.assertIn("stale relative to live governance policy", human_result.stdout)
+        self.assertIn("Snapshot-captured surface version pins: none configured", human_result.stdout)
 
     def test_event_inspect_human_readable_surfaces_redaction_level_and_audit_content_status(self) -> None:
         self.init_repo()

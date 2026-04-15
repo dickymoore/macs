@@ -101,6 +101,7 @@ class BaseTmuxAdapter:
         qualification_status: str,
         optional_enrichments: list[str] | None = None,
         governed_surfaces: list[str] | None = None,
+        governed_surface_requirements: dict[str, dict[str, object]] | None = None,
     ):
         self.adapter_id = adapter_id
         self.runtime_type = runtime_type
@@ -109,6 +110,11 @@ class BaseTmuxAdapter:
         self.qualification_status = qualification_status
         self.optional_enrichments = optional_enrichments or []
         self.governed_surfaces = governed_surfaces or []
+        self.governed_surface_requirements = {
+            surface_id: dict(requirements)
+            for surface_id, requirements in (governed_surface_requirements or {}).items()
+            if surface_id in self.governed_surfaces and isinstance(requirements, dict)
+        }
 
     def descriptor(self) -> dict[str, object]:
         contract = {
@@ -142,6 +148,7 @@ class BaseTmuxAdapter:
             "supported_operations": list(REQUIRED_OPERATIONS),
             "unsupported_features": self.unsupported_features,
             "governed_surfaces": self.governed_surfaces,
+            "governed_surface_requirements": self.governed_surface_requirements,
             "degraded_mode_behavior": self.degraded_mode,
             "qualification_status": self.qualification_status,
             "contract": contract,
@@ -177,6 +184,17 @@ class BaseTmuxAdapter:
                 worker_id=worker["worker_id"],
                 observed_at=observed_at,
                 kind="fact",
+                name="runtime_identity",
+                value={"runtime_identity": self.runtime_type},
+                freshness_seconds=worker["freshness_seconds"],
+                confidence="medium",
+                source_ref=source_ref,
+            ),
+            EvidenceEnvelope(
+                adapter_id=self.adapter_id,
+                worker_id=worker["worker_id"],
+                observed_at=observed_at,
+                kind="fact",
                 name="capability_decl",
                 value={"capabilities": worker["capabilities"]},
                 freshness_seconds=worker["freshness_seconds"],
@@ -201,9 +219,19 @@ class BaseTmuxAdapter:
         ]
         return [item.as_dict() for item in evidence]
 
-    def dispatch(self, worker: dict[str, object], assignment_payload: str) -> dict[str, object]:
+    def dispatch(
+        self,
+        worker: dict[str, object],
+        assignment_payload: str,
+        *,
+        secret_context: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         self._send_keys(worker, [assignment_payload, "Enter"])
-        return {"ok": True, "adapter_id": self.adapter_id, "worker_id": worker["worker_id"]}
+        result = {"ok": True, "adapter_id": self.adapter_id, "worker_id": worker["worker_id"]}
+        secret_delivery = _secret_delivery_summary(secret_context)
+        if secret_delivery is not None:
+            result["secret_delivery"] = secret_delivery
+        return result
 
     def capture(self, worker: dict[str, object], lines_or_cursor: int = 40) -> dict[str, object]:
         result = subprocess.run(
@@ -294,3 +322,17 @@ class BaseTmuxAdapter:
         )
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or "tmux send-keys failed")
+
+
+def _secret_delivery_summary(secret_context: dict[str, object] | None) -> dict[str, object] | None:
+    if not isinstance(secret_context, dict):
+        return None
+    secret_refs = [str(item) for item in secret_context.get("secret_refs", []) if str(item).strip()]
+    delivery_mode = str(secret_context.get("delivery_mode") or "unspecified")
+    if not secret_refs and delivery_mode == "unspecified":
+        return None
+    return {
+        "delivery_mode": delivery_mode,
+        "secret_ref_count": len(secret_refs),
+        "secret_refs": secret_refs,
+    }

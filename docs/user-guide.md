@@ -22,7 +22,7 @@ The controller remains authoritative. Adapters and runtimes can provide evidence
 
 | Family | Use it for | Common verbs |
 | --- | --- | --- |
-| `macs setup` | Repo bootstrap, onboarding checks, and release-gate validation | `init`, `check`, `validate`, `dry-run` |
+| `macs setup` | Repo bootstrap, guided onboarding, onboarding checks, and release-gate validation | `guide`, `init`, `check`, `validate`, `dry-run` |
 | `macs worker` | Discover, register, inspect, and govern workers | `discover`, `register`, `inspect`, `enable`, `disable`, `quarantine` |
 | `macs adapter` | Inspect contract shape and validate runtime support | `list`, `inspect`, `probe`, `validate` |
 | `macs task` | Normal orchestration work | `create`, `assign`, `inspect`, `pause`, `resume`, `reroute`, `abort`, `close`, `archive` |
@@ -54,10 +54,13 @@ NO_COLOR=1 COLUMNS=80 ./macs task inspect --task task-123
 ### 1. Bootstrap and inspect the repo-local control plane
 
 ```bash
+./macs setup guide
 ./macs setup init
 ./macs setup check
 ./macs overview show
 ```
+
+Use `setup guide` first when you want the controller-owned, read-only onboarding briefing with explicit `[READ-ONLY]` versus `[ACTION]` follow-up labels.
 
 Use `setup dry-run` before onboarding more workers if you want the conservative, read-only operator path:
 
@@ -123,11 +126,13 @@ Pause moves the task to `intervention_hold` and keeps the same live lease in `pa
 ### 5. Close and archive completed work
 
 ```bash
+./macs task checkpoint --task <task-id> --target-action task.close
 ./macs task close --task <task-id>
+./macs task checkpoint --task <task-id> --target-action task.archive
 ./macs task archive --task <task-id>
 ```
 
-`close` is the operator verb for the terminal task state `completed`. `archive` is only valid after the task is already terminal.
+`close` is the operator verb for the terminal task state `completed`, but it now fails closed unless MACS already has a current `task.close` checkpoint for the same task scope and repo state. `archive` requires its own `task.archive` checkpoint and is only valid after the task is already terminal.
 
 ## Inspect and Recover Controller-Owned State
 

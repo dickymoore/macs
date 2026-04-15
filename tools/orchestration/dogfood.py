@@ -204,6 +204,7 @@ class _ReferenceDogfoodRunner:
                 raise RuntimeError("Gemini task did not return to active after resume")
 
             local_task = created_tasks_by_key(created_tasks, "local")
+            self._checkpoint_task_close(local_task["task_id"])
             self._run_cli_json("task", "close", "--task", local_task["task_id"])
 
             local_worker_id = str(workers["local"]["worker_id"])
@@ -215,7 +216,9 @@ class _ReferenceDogfoodRunner:
             overview_after_warning = self._run_cli_json("overview", "show")[0]
 
             for runtime_key in ("codex", "claude", "gemini"):
-                self._run_cli_json("task", "close", "--task", created_tasks_by_key(created_tasks, runtime_key)["task_id"])
+                task_id = created_tasks_by_key(created_tasks, runtime_key)["task_id"]
+                self._checkpoint_task_close(task_id)
+                self._run_cli_json("task", "close", "--task", task_id)
 
             event_list = self._run_cli_json("event", "list")[0]
             if not event_list["data"]["events"]:
@@ -308,6 +311,7 @@ class _ReferenceDogfoodRunner:
         payload, _ = self._run_cli_json("setup", "init")
         if not payload.get("ok"):
             raise RuntimeError("setup init did not succeed for dogfood scenario")
+        self._init_git_repo()
 
     def _start_reference_tmux(self) -> None:
         subprocess.run(
@@ -357,6 +361,37 @@ class _ReferenceDogfoodRunner:
 
     def _inspect_lease(self, lease_id: str) -> dict[str, object]:
         return self._run_cli_json("lease", "inspect", "--lease", lease_id)[0]
+
+    def _checkpoint_task_close(self, task_id: str) -> dict[str, object]:
+        return self._run_cli_json(
+            "task",
+            "checkpoint",
+            "--task",
+            task_id,
+            "--target-action",
+            "task.close",
+        )[0]
+
+    def _init_git_repo(self) -> None:
+        def run_git(*args: str) -> None:
+            result = subprocess.run(
+                ["git", *args],
+                cwd=self.repo_root,
+                env=self._env(),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"git {' '.join(args)} failed")
+
+        run_git("init")
+        run_git("config", "user.email", f"{self.scenario_label}@dogfood.example.test")
+        run_git("config", "user.name", "Reference Dogfood")
+        (self.repo_root / ".gitignore").write_text(".codex/\n", encoding="utf-8")
+        (self.repo_root / "README.md").write_text("reference dogfood baseline\n", encoding="utf-8")
+        run_git("add", ".gitignore", "README.md")
+        run_git("commit", "-m", "Reference dogfood baseline")
 
     def _lock_list(self) -> dict[str, object]:
         return self._run_cli_json("lock", "list")[0]

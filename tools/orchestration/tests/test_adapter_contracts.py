@@ -58,6 +58,32 @@ class AdapterContractTests(unittest.TestCase):
                 self.assertGreaterEqual(len(validation["unsupported_features"]), 1)
                 self.assertTrue(descriptor["degraded_mode_behavior"])
 
+    def test_dispatch_accepts_bounded_secret_context_without_exposing_raw_values(self) -> None:
+        adapter = CodexAdapter()
+        worker = {
+            "worker_id": "worker-codex-secret-contract",
+            "tmux_socket": "/tmp/contract.sock",
+            "tmux_session": "contract",
+            "tmux_pane": "%3",
+        }
+
+        with mock.patch.object(adapter, "_send_keys") as send_keys:
+            result = adapter.dispatch(
+                worker,
+                "MACS_TASK_ASSIGN {}",
+                secret_context={
+                    "delivery_mode": "preloaded_worker_env",
+                    "secret_refs": ["mcp.codex.token"],
+                    "resolved_secrets": [{"secret_ref": "mcp.codex.token", "value": "hidden"}],
+                },
+            )
+
+        send_keys.assert_called_once_with(worker, ["MACS_TASK_ASSIGN {}", "Enter"])
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["secret_delivery"]["delivery_mode"], "preloaded_worker_env")
+        self.assertEqual(result["secret_delivery"]["secret_refs"], ["mcp.codex.token"])
+        self.assertNotIn("hidden", str(result["secret_delivery"]))
+
     def test_codex_probe_normalizes_permission_surface_claim(self) -> None:
         adapter = CodexAdapter()
         worker = {

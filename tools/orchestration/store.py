@@ -234,6 +234,20 @@ def _schema_sql(*, include_live_lease_index: bool = True) -> str:
         confidence TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS review_checkpoints (
+        checkpoint_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        target_action TEXT NOT NULL,
+        actor_type TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        captured_at TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        decision_event_id TEXT,
+        affected_refs TEXT NOT NULL,
+        evidence_refs TEXT NOT NULL,
+        baseline_fingerprint TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS recovery_runs (
         recovery_run_id TEXT PRIMARY KEY,
         task_id TEXT,

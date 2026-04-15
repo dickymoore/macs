@@ -463,25 +463,48 @@ Phase 1 policy must distinguish at least:
 - `review`
 - `privacy_sensitive_offline`
 
+### BMAD Execution Policy
+
+Operator-facing BMAD phases map onto the canonical workflow classes and runtime-order rules below:
+
+| BMAD phase | Canonical `workflow_class` | `primary_plus_fallback` | `full_hybrid` | Additional guard |
+| --- | --- | --- | --- | --- |
+| Context capture / repo familiarization | `documentation_context` | `codex -> claude` | `codex -> claude` | drain degraded, unavailable, and quarantined workers |
+| Planning artifacts / PRD / story shaping | `planning_docs` | `claude -> codex` | `claude -> codex -> gemini` | preserve planning rationale in routing decision |
+| Solution design / architecture | `solutioning` | `claude -> codex` | `claude -> codex -> gemini` | hybrid profile broadens alternative exploration only |
+| Implementation / development | `implementation` | `codex -> claude` | `codex -> claude -> local` | worker must be interruptible |
+| Review / QA / release review | `review` | `codex -> claude` | `codex -> claude -> gemini` | review checkpoints and operator approvals stay explicit |
+| Privacy-sensitive / offline work | `privacy_sensitive_offline` | `local only` | `local only` | forbid networked tools unless policy explicitly relaxes it |
+
 ### Default Policy Shape
 
-```yaml
-workflow_defaults:
-  documentation_context:
-    preferred_runtimes: [codex, claude]
-    disallowed_states: [degraded, unavailable, quarantined]
-  planning_docs:
-    preferred_runtimes: [claude, codex, gemini]
-  solutioning:
-    preferred_runtimes: [claude, codex, gemini]
-  implementation:
-    preferred_runtimes: [codex, claude, local]
-    require_interruptibility: true
-  review:
-    preferred_runtimes: [codex, claude, gemini]
-  privacy_sensitive_offline:
-    preferred_runtimes: [local]
-    forbid_networked_tools: true
+```json
+{
+  "policy_version": "phase1-defaults-v1",
+  "workflow_defaults": {
+    "documentation_context": {
+      "preferred_runtimes": ["codex", "claude"],
+      "disallowed_states": ["degraded", "unavailable", "quarantined"]
+    },
+    "planning_docs": {
+      "preferred_runtimes": ["claude", "codex", "gemini"]
+    },
+    "solutioning": {
+      "preferred_runtimes": ["claude", "codex", "gemini"]
+    },
+    "implementation": {
+      "preferred_runtimes": ["codex", "claude", "local"],
+      "require_interruptibility": true
+    },
+    "review": {
+      "preferred_runtimes": ["codex", "claude", "gemini"]
+    },
+    "privacy_sensitive_offline": {
+      "preferred_runtimes": ["local"],
+      "forbid_networked_tools": true
+    }
+  }
+}
 ```
 
 ### Repository Default Decisions
@@ -491,6 +514,21 @@ workflow_defaults:
 - Default privacy-sensitive routing: local/runtime-neutral adapter only unless operator overrides policy
 - Gemini is first-class but initially more likely to serve planning, review, and alternative-solution paths than the default implementation path
 
+### Operating Profiles
+
+`primary_plus_fallback` is the shipping-default scope-control profile. It keeps one primary runtime and one fallback runtime per BMAD phase, with `privacy_sensitive_offline` pinned to `local` only.
+
+`full_hybrid` is an explicit opt-in profile that uses the full ranked runtime lists in `routing-policy.json`:
+
+- `documentation_context`: `codex -> claude`
+- `planning_docs`: `claude -> codex -> gemini`
+- `solutioning`: `claude -> codex -> gemini`
+- `implementation`: `codex -> claude -> local`
+- `review`: `codex -> claude -> gemini`
+- `privacy_sensitive_offline`: `local`
+
+Profiles do not relax the safety baseline. They only change candidate breadth. No profile may bypass controller authority, operator-confirmed actions, governed-surface controls, or audit requirements.
+
 ### Routing Outcome Contract
 
 Every assignment decision must persist:
@@ -499,8 +537,10 @@ Every assignment decision must persist:
 - selected worker
 - rejection reasons for ineligible workers
 - evidence snapshot references
-- policy version used
+- `policy_version` plus `policy_path`
+- `governance_policy_version` plus `governance_policy_path`
 - lock check result
+- enough rejected-worker detail to derive operator-visible blocking conditions and next actions when no worker is eligible
 - operator override context if present
 
 ## Runtime Adapter Architecture
@@ -625,6 +665,48 @@ Recommended tables:
 - `recovery_runs`
 - `policy_snapshots`
 
+### Event Record Schema
+
+The canonical event record persisted to `events` and mirrored to `events.ndjson` is:
+
+- `event_id`
+- `event_type`
+- `aggregate_type`
+- `aggregate_id`
+- `timestamp`
+- `actor_type`
+- `actor_id`
+- `correlation_id`
+- `causation_id`
+- `payload`
+- `redaction_level`
+
+`redaction_level` is `none`, `redacted`, or `omitted`.
+
+Common payload fragments:
+
+- `affected_refs`: task, lease, worker, lock, or recovery-run refs touched by the action
+- `decision_action`, `decision_class`, `decision_event_id`, `intervention_rationale`
+- `routing_decision_id`, `selected_worker_id`, `policy_version`, `governance_policy_version`
+- `audit_content`: per-content status for `prompt_content`, `terminal_snapshot`, and `tool_output`
+- event-specific facts such as previous/next worker state, lock conflict detail, or startup recovery summary
+
+Event families in Phase 1:
+
+- task lifecycle: `task.created`, `task.assigned`, `task.activated`, `task.paused`, `task.resumed`, `task.rerouted`, `task.completed`, `task.assignment_failed`, `task.archived`
+- lease lifecycle: `lease.activated`, `lease.paused`, `lease.resumed`, `lease.revoked`, `lease.replaced`, `lease.completed`, `lease.suspended`
+- lock lifecycle: `lock.reserved`, `lock.activated`, `lock.released`
+- worker governance: `worker.discovery_refreshed`, `worker.registered`, `worker.enabled`, `worker.disabled`, `worker.quarantined`, `worker.health_reclassified`
+- routing and recovery: `routing.decision_recorded`, `intervention.decision_recorded`, `recovery.retry_requested`, `recovery.reconciled`, `controller.startup_recovery_completed`
+
+### Supporting Evidence Records
+
+Phase 1 uses three supporting evidence tables in addition to canonical events:
+
+- `routing_decisions`: `decision_id`, `task_id`, `selected_worker_id`, `rationale`, `evidence_ref`, `created_at`
+- `recovery_runs`: `recovery_run_id`, `task_id`, `state`, `started_at`, `ended_at`, `anomaly_summary`, `decision_summary`
+- `policy_snapshots`: `snapshot_id`, `policy_origin`, `policy_version`, `captured_at`, `payload`
+
 ### Write Model
 
 Each controller action follows this pattern:
@@ -658,6 +740,7 @@ Persist optionally by policy:
 Controls:
 
 - policy-based redaction
+- explicit `retain | redact | omit` mode per rich-content class
 - bounded retention windows for rich content
 - longer retention for minimal event metadata
 - local-host storage by default
@@ -753,36 +836,65 @@ Each recovery run produces:
 #### Automatic
 
 - worker discovery refresh
-- health reclassification from fresh evidence
+- health reclassification from fresh or stale evidence
 - draining degraded workers from new routing
 - creation of warning events
+- startup recovery summary generation
 
 #### Policy-Automatic but Operator-Visible
 
-- candidate ranking
-- lock reservation proposal during assignment
+- `task.assign`
+- candidate ranking and worker eligibility filtering
+- lock reservation during assignment
+- `worker.disable` and `worker.quarantine` drain behavior
 - transition to `expiring` or `intervention_hold` from degraded evidence
 
-#### Operator-Confirmed
+#### Operator-Confirmed and Implemented in Phase 1
 
+- `task.pause`
+- `task.resume`
 - reroute to a new worker after degradation
+- `recovery.retry`
+- `recovery.reconcile`
+
+#### Operator-Confirmed but Guarded in Phase 1
+
+- `task.abort`
 - lock override
-- abort of active work
 - release of uncertain locks
-- any action that changes ownership during unresolved ambiguity
+- any action that changes ownership during unresolved ambiguity outside the implemented reroute and recovery flows
 
 #### Forbidden in MVP
 
+- `governance.auto_push`
+- `governance.remote_operation`
 - silent ownership transfer
-- autonomous remote operations
 - automatic push or deployment side effects
 - adapter-driven authority mutation
 
+### Product Safety Policies
+
+- `POL-1 No Auto Push`: controller defaults and shipped profiles may not publish code, merge changes, or push remotes automatically.
+- `POL-2 No Autonomous Remote Ops`: remote execution or external write-side effects require explicit governed-surface policy and operator confirmation; privacy-sensitive/offline work forbids them by default.
+- `POL-3 Baseline Diff/Review Gate`: close/archive and any safety-relaxing action require an operator-visible diff/review checkpoint plus an attributable decision event.
+- `POL-4 Explicit Approval Classes`: automatic, policy-automatic, operator-confirmed, guarded, and forbidden actions are part of the product contract rather than hidden command behavior.
+- `POL-5 Governed Surface Control`: MCP and similar tool surfaces are deny-by-default unless allowlisted, pinned to approved adapters where required, and auditable in routing decisions.
+
 ### Trust Boundaries
 
-- Adapters are semi-trusted integration components.
-- Worker runtimes are execution environments, not control-plane peers.
-- MCP and tool integrations are governed surfaces that require allowlisting or equivalent trust controls before production-oriented enablement.
+| Boundary | Default stance | Required control |
+| --- | --- | --- |
+| Runtime adapter | semi-trusted evidence provider | qualification gate, unsupported-feature declarations, governed-surface declaration, repo-local enable/disable control |
+| Worker runtime | execution environment, never authority peer | controller-owned ownership, routing, and recovery state; adapter evidence stays bounded as fact, signal, or claim |
+| MCP and tool surfaces | deny by default | governance allowlist, adapter pin where required, explicit routing rejection reason when blocked |
+| Networked remote mutation | forbidden by default for autonomous use | operator confirmation plus governed-surface policy; always forbidden for silent execution |
+| Secrets | outside authoritative audit payloads by default | scoped secret refs only, bound to adapter/workflow/surface; no raw secret values in controller events |
+
+Current Phase 1 implementation already ships `allowlisted_surfaces`, `pinned_surfaces`, workflow overrides, and audit-content policy through `governance-policy.json`. This correction pass reserves three additional first-class governance controls for production-oriented profiles:
+
+- `operating_profile`
+- `surface_version_pins`
+- `secret_scopes`
 
 ## Implementation Architecture
 
@@ -915,6 +1027,17 @@ Phase 1 release requires:
 - successful 4-worker reference scenario
 - verification that restart recovery preserves zero-or-one active lease invariants
 
+### Operational Metrics
+
+| Metric | Definition | Target | Evidence source |
+| --- | --- | --- | --- |
+| conflict_prevention_rate | detected conflicting write-impacting assignment attempts blocked before dispatch | 100% in passing drills; 0 silent conflicting assignments in passing release-gate runs | failure-mode matrix, routing decisions, lock events |
+| stale_lease_recovery_visibility_seconds | time from stale/ambiguous live-lease detection to operator-visible hold or reconciliation | <= 60s in reference environment | startup recovery report, recovery events, warning timeline |
+| reroute_success_rate | successful operator-confirmed reroutes divided by reroute attempts | >= 90% in controlled recovery drills; 100% preserve causation chain on success | `task.rerouted`, `lease.replaced`, and recovery-run evidence |
+| intervention_frequency | unplanned operator-confirmed interventions divided by total tasks in the default profile | < 10% excluding planned drills and demonstrations | dogfood summary plus intervention events |
+| false_safe_routing_incidents | assignments later frozen as unsafe without a contemporaneous warning, policy block, or recovery hold | 0 in any passing release-gate run | failure drills, dogfood evidence, event audit |
+| auditable_passing_run_rate | PASS runs that include complete report, JSON summary, and correlated event IDs | 100% | release-gate summary and evidence package |
+
 ## Architecture Validation Results
 
 ### Coherence Validation
@@ -944,4 +1067,3 @@ The implementation path is concrete enough for story decomposition:
 ### Readiness Assessment
 
 Overall status: READY FOR IMPLEMENTATION
-

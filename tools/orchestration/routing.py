@@ -88,13 +88,31 @@ def evaluate_task_routing(
             reasons.append("interruptibility_required")
         if workflow_defaults.get("forbid_networked_tools") and worker["runtime"] != "local":
             reasons.append("privacy_sensitive_local_only")
-        adapter_descriptor = get_adapter(str(worker["adapter_id"])).descriptor()
+        adapter = get_adapter(str(worker["adapter_id"]))
+        adapter_descriptor = adapter.descriptor()
         governance = evaluate_worker_governance(
             worker,
             adapter_descriptor,
             governance_policy,
             workflow_class=str(task["workflow_class"]),
         )
+        adapter_probe_warning = None
+        if governance["surface_version_pins"].get("probe_required"):
+            adapter_evidence = []
+            try:
+                adapter_evidence = adapter.probe(worker)
+            except RuntimeError as exc:
+                adapter_probe_warning = str(exc)
+            governance = evaluate_worker_governance(
+                worker,
+                adapter_descriptor,
+                governance_policy,
+                workflow_class=str(task["workflow_class"]),
+                adapter_evidence=adapter_evidence,
+                enforce_surface_version_pins=True,
+            )
+            if adapter_probe_warning is not None:
+                governance["surface_version_pins"]["probe_error"] = adapter_probe_warning
         reasons.extend(governance_rejection_reasons(governance))
         missing_capabilities = sorted(set(task["required_capabilities"]) - set(worker["capabilities"]))
         if missing_capabilities:
@@ -110,6 +128,8 @@ def evaluate_task_routing(
             "reasons": reasons,
             "governance": governance,
         }
+        if adapter_probe_warning is not None:
+            candidate["adapter_probe_warning"] = adapter_probe_warning
         if reasons:
             rejected_workers.append(candidate)
         else:
@@ -135,6 +155,7 @@ def persist_routing_decision(
     evaluation: RoutingEvaluation,
     *,
     lock_check_result: dict[str, object],
+    secret_resolution: dict[str, object] | None = None,
 ) -> dict[str, object]:
     decision_id = f"route-{uuid.uuid4().hex[:12]}"
     created_at = utc_now()
@@ -148,6 +169,8 @@ def persist_routing_decision(
         "governance_policy_path": evaluation.governance_policy_path,
         "lock_check_result": lock_check_result,
     }
+    if isinstance(secret_resolution, dict):
+        rationale["secret_resolution"] = secret_resolution
     event = EventRecord(
         event_id=f"evt-routing-{uuid.uuid4().hex[:12]}",
         event_type="routing.decision_recorded",
@@ -198,15 +221,23 @@ def routing_blocking_condition(rejected_workers: list[dict[str, object]]) -> str
     reasons = {reason for worker in rejected_workers for reason in worker.get("reasons", [])}
     has_privacy_local_only = "privacy_sensitive_local_only" in reasons
     has_governance = any(reason.startswith("governed_surface_") or reason.startswith("undeclared_governed_surface:") for reason in reasons)
+    surface_version_failures = _surface_version_failure_labels(reasons)
+    has_surface_version = bool(surface_version_failures)
     has_disabled_adapter = "adapter_disabled" in reasons
-    if has_disabled_adapter and not (has_privacy_local_only or has_governance):
+    fragments = []
+    if has_disabled_adapter:
+        fragments.append("repo-local adapter settings disabled the available workers")
+    if has_privacy_local_only:
+        fragments.append("privacy-sensitive routing rejected non-local workers")
+    if has_governance:
+        fragments.append("governance policy rejected governed surfaces for the available workers")
+    if has_surface_version:
+        suffix = f" ({', '.join(surface_version_failures)})" if surface_version_failures else ""
+        fragments.append(f"surface version pin enforcement rejected the available workers{suffix}")
+    if fragments:
+        return _join_reason_fragments(fragments)
+    if has_disabled_adapter and not (has_privacy_local_only or has_governance or has_surface_version):
         return "repo-local adapter settings disabled the available workers"
-    if has_disabled_adapter and has_governance:
-        return "repo-local adapter settings and governance policy rejected the available workers"
-    if has_disabled_adapter and has_privacy_local_only:
-        return "repo-local adapter settings and privacy-sensitive routing rejected the available workers"
-    if has_privacy_local_only and has_governance:
-        return "privacy-sensitive routing rejected non-local workers and governance policy rejected governed surfaces"
     if has_privacy_local_only:
         return "privacy-sensitive routing rejected non-local workers"
     if has_governance:
@@ -224,22 +255,25 @@ def routing_next_action(
     reasons = {reason for worker in rejected_workers for reason in worker.get("reasons", [])}
     has_privacy_local_only = "privacy_sensitive_local_only" in reasons
     has_governance = any(reason.startswith("governed_surface_") or reason.startswith("undeclared_governed_surface:") for reason in reasons)
+    has_surface_version = bool(_surface_version_failure_labels(reasons))
     has_disabled_adapter = "adapter_disabled" in reasons
     if has_disabled_adapter and adapter_settings_path:
         return f"inspect {adapter_settings_path}, enable a safe adapter, then retry task {task_id}"
-    if has_privacy_local_only and has_governance:
-        if governance_policy_path:
-            return (
-                f"register or select a local worker without blocked governed surfaces, then inspect {governance_policy_path} "
-                f"before retrying task {task_id}"
-            )
-        return f"register or select a local worker without blocked governed surfaces before retrying task {task_id}"
+    action_steps = []
     if has_privacy_local_only:
-        return f"register or select a local worker before retrying task {task_id}"
-    if has_governance:
+        action_steps.append("register or select a local worker")
+    if has_surface_version:
         if governance_policy_path:
-            return f"inspect rejected workers and review {governance_policy_path} before retrying task {task_id}"
-        return f"inspect rejected workers and governance policy before retrying task {task_id}"
+            action_steps.append(f"inspect rejected workers, probe live version evidence, and review {governance_policy_path}")
+        else:
+            action_steps.append("inspect rejected workers and probe live version evidence")
+    elif has_governance:
+        if governance_policy_path:
+            action_steps.append(f"inspect rejected workers and review {governance_policy_path}")
+        else:
+            action_steps.append("inspect rejected workers and governance policy")
+    if action_steps:
+        return f"{_join_reason_fragments(action_steps)} before retrying task {task_id}"
     return f"inspect the last routing decision for task {task_id} before retrying"
 
 
@@ -268,3 +302,26 @@ def inspect_routing_decision(state_db: Path, task_id: str) -> dict[str, object] 
         "evidence_ref": json.loads(row["evidence_ref"]),
         "created_at": row["created_at"],
     }
+
+
+def _surface_version_failure_labels(reasons: set[str]) -> list[str]:
+    labels = []
+    for prefix, label in (
+        ("surface_version_pin_mismatch:", "mismatch"),
+        ("surface_version_evidence_missing:", "missing evidence"),
+        ("surface_version_evidence_stale:", "stale evidence"),
+        ("surface_version_evidence_untrusted:", "low-trust evidence"),
+    ):
+        if any(reason.startswith(prefix) for reason in reasons):
+            labels.append(label)
+    return labels
+
+
+def _join_reason_fragments(fragments: list[str]) -> str:
+    if not fragments:
+        return ""
+    if len(fragments) == 1:
+        return fragments[0]
+    if len(fragments) == 2:
+        return f"{fragments[0]} and {fragments[1]}"
+    return ", ".join(fragments[:-1]) + f", and {fragments[-1]}"

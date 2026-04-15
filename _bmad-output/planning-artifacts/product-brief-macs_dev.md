@@ -2,7 +2,7 @@
 title: "Product Brief: macs_dev"
 status: "complete"
 created: "2026-04-09T18:17:14+0100"
-updated: "2026-04-09T18:20:12+0100"
+updated: "2026-04-14T00:00:00+0100"
 inputs:
   - "/home/codexuser/macs_dev/docs/architecture.md"
   - "/home/codexuser/macs_dev/_bmad-output/brainstorming/brainstorming-session-2026-04-09-17-52-26.md"
@@ -31,6 +31,8 @@ That gap makes serious parallel work fragile. Two workers can drift under the sa
 
 MACS should evolve from a supervision bridge into a controller-owned orchestration plane. The first production-grade version will let one orchestration controller manage multiple tmux worker windows, each backed by a pluggable runtime adapter. Workers will expose capability and health metadata through adapters, but the controller will remain the authority on task state, leases, locks, routing decisions, interventions, and recovery.
 
+BMAD execution policy is now explicit rather than implied. Documentation/context routes `codex` then `claude`; planning docs and solutioning route `claude` then `codex`, with `gemini` available only in the broader hybrid profile; implementation routes `codex` then `claude`, requiring interruptible workers, with `local` as a governed fallback in the hybrid profile; review routes `codex` then `claude`, with `gemini` as an additional hybrid candidate; privacy-sensitive or offline work routes `local` only unless policy is explicitly relaxed. The default shipping operating profile is `primary_plus_fallback`; `full_hybrid` is opt-in for teams that want broader runtime mixing without changing the safety baseline.
+
 The experience goal is straightforward: maintainers can assign and monitor parallel work across heterogeneous runtimes without losing control. The system should make ownership explicit, route work according to policy and evidence, prevent unsafe parallel writes through locks and coordination boundaries, surface token or session exhaustion where possible, and let operators inspect, pause, reroute, or reconcile workers across windows when something goes wrong. Comprehensive automated tests will validate orchestration behavior, not only individual scripts.
 
 ## What Makes This Different
@@ -43,6 +45,8 @@ The key differences are:
 - **Heterogeneous runtime support**: MACS is designed to coordinate mixed vendors and local agents rather than optimize for one runtime stack.
 - **Safe parallelisation**: explicit ownership, leases, locks, and reconciliation gates are core product requirements, not future polish.
 - **Evidence-backed operation**: adapter outputs are treated as facts, signals, or claims with confidence, not as unquestioned truth.
+- **Phase-aware execution policy**: BMAD phases map to explicit runtime-routing rules and operating profiles instead of ad hoc operator habit.
+- **Safety as product policy**: no-auto-push, no autonomous remote ops, operator approvals for high-consequence actions, and baseline diff/review gates are ship rules, not documentation caveats.
 - **Testable resilience**: split-brain, stale-state, and coordination-failure scenarios are meant to be exercised in automated regression suites.
 - **Open-source production path**: the product is intended to be usable by maintainers and serious adopters in real repositories, not only as an internal experiment or framework demo.
 
@@ -62,12 +66,12 @@ The "aha" moment is when a user sees multiple heterogeneous workers running in p
 
 Within 6-12 months, this initiative succeeds if:
 
-- MACS can repeatedly run real parallel multi-agent workflows across mixed runtimes without coordination breakdowns.
-- The orchestration layer has strong automated regression coverage for routing, locking, ownership, intervention, and recovery behavior.
-- Maintainers can use the system in real repositories with confidence that orchestration failures are visible and recoverable.
-- Early adopters view MACS as a credible open-source foundation for heterogeneous agent orchestration.
-- Adoption friction is low enough that serious technical users can configure mixed-runtime orchestration without bespoke per-repo glue.
-- Contributor work on new runtimes and orchestration features can land against a stable control-plane model rather than ad hoc session logic.
+- Passing release-gate runs show zero silent conflicting assignments and zero false-safe routing incidents.
+- Stale or ambiguous live-lease cases become operator-visible and assignment-blocking within 60 seconds in the reference environment.
+- Operator-confirmed reroutes succeed at least 90% of the time in controlled recovery drills without violating the one-live-lease invariant.
+- Unplanned manual intervention stays below 10% of tasks in default-profile internal dogfood runs, excluding planned drills.
+- 100% of passing release-gate and dogfood runs produce an auditable evidence package with reports, JSON summaries, and correlated event IDs.
+- Serious adopters can configure the default `primary_plus_fallback` profile without bespoke glue, while `full_hybrid` remains available as an explicit opt-in profile.
 
 ## Scope
 
@@ -77,23 +81,28 @@ Within 6-12 months, this initiative succeeds if:
 - Pluggable runtime adapters for at least Codex, Claude, Gemini, and one local/runtime-neutral adapter
 - Worker registry and capability metadata
 - Controller-owned task routing and ownership
+- Explicit BMAD execution policy with `primary_plus_fallback` and `full_hybrid` operating profiles
 - Explicit locks and coordination boundaries for merge-conflict avoidance
 - Operator monitoring and intervention across windows
+- First-class product safety policies: no-auto-push, no autonomous remote ops, operator approvals for high-consequence actions, and baseline diff/review gates
+- Governed-surface allowlists and adapter pins, with version-pin and scoped-secret controls reserved as production-oriented hardening requirements
 - Token/session-limit visibility where available
+- Concrete audit-event schema and auditable release evidence package
 - Comprehensive automated tests around orchestration, locking, routing, and recovery
 
 ### Explicitly Out of Scope for MVP
 
 - Fully autonomous self-replanning without operator oversight
 - Cross-machine or distributed orchestration beyond the local host
+- Defaulting operators into unconstrained full-hybrid routing without explicit profile selection
 - Deep enterprise IAM/compliance packaging
 - Broad marketplace or ecosystem layers beyond the initial adapter model
 
 ## Technical Approach
 
-The product direction should follow a conservative-to-balanced architecture path. Start with a durable control core: worker registry, task/lease state, protected-surface locks, event log, and intervention controls. Layer in runtime adapters that provide evidence-bearing capability and health data. Add confidence-weighted routing, recovery semantics, and richer coordination checks once the controller-owned authority model is stable.
+The product direction should follow a conservative-to-balanced architecture path. Start with a durable control core: worker registry, task/lease state, protected-surface locks, concrete event schema, event log, and intervention controls. Layer in runtime adapters that provide evidence-bearing capability and health data. Add confidence-weighted routing, recovery semantics, governed-surface controls, and richer coordination checks once the controller-owned authority model is stable.
 
-This keeps the MVP disciplined: one local-host orchestration controller, bounded runtime adapters, explicit safety boundaries, and strong regression coverage before broader autonomy or distributed execution. It also keeps MACS aligned with where the domain is heading: durable state, explicit workflows, observability, replayable recovery, and protocol-friendly interoperability across mixed runtimes.
+This keeps the MVP disciplined: one local-host orchestration controller, bounded runtime adapters, explicit phase-to-runtime policy, explicit safety boundaries, and strong regression coverage before broader autonomy or distributed execution. Governance becomes a first-class product surface through repo-local routing and governance policy domains, deny-by-default governed surfaces, adapter pinning, reserved version-pin and scoped-secret controls, and auditable operator approvals. It also keeps MACS aligned with where the domain is heading: durable state, explicit workflows, observability, replayable recovery, and protocol-friendly interoperability across mixed runtimes.
 
 ## Vision
 

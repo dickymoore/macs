@@ -18,6 +18,12 @@ class CodexAdapter(BaseTmuxAdapter):
             qualification_status="reference",
             optional_enrichments=["runtime_permission_surface"],
             governed_surfaces=["mcp"],
+            governed_surface_requirements={
+                "mcp": {
+                    "requires_secret": True,
+                    "delivery_mode": "preloaded_worker_env",
+                }
+            },
         )
 
     def probe(self, worker: dict[str, object]) -> list[dict[str, object]]:

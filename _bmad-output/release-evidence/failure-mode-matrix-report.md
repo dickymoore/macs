@@ -2,7 +2,7 @@
 
 ## 1. Run Metadata
 
-- Report date: 2026-04-10T17:51:11+00:00
+- Report date: 2026-04-14T09:49:51+00:00
 - Owner: qa
 - Outcome: `PASS`
 
@@ -24,7 +24,7 @@
 - Command: `python3 -m unittest tools.orchestration.tests.test_failure_drills_cli`
 - Return code: 0
 - stdout tail: none
-- stderr tail: ........, ----------------------------------------------------------------------, Ran 8 tests in 3.310s, OK
+- stderr tail: ........, ----------------------------------------------------------------------, Ran 8 tests in 3.140s, OK
 
 ## 4. Sign-Off
 

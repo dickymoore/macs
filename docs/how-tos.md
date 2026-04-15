@@ -4,20 +4,26 @@ These recipes are short, task-oriented procedures for common operator workflows.
 
 ## Bootstrap a Repo-Local Control Plane
 
-1. Initialize the repo-local orchestration layout.
+1. Start with the read-only guided onboarding entry point.
+
+```bash
+./macs setup guide
+```
+
+2. Initialize the repo-local orchestration layout.
 
 ```bash
 ./macs setup init
 ```
 
-2. Inspect what MACS created.
+3. Inspect what MACS created.
 
 ```bash
 ./macs setup check
 ./macs setup check --json
 ```
 
-3. Review the conservative onboarding path before you mutate more state.
+4. Review the conservative onboarding path before you mutate more state.
 
 ```bash
 ./macs setup dry-run

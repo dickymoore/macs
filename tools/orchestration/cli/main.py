@@ -35,6 +35,7 @@ from tools.orchestration.config import (
     resolved_compatibility_paths,
 )
 from tools.orchestration.history import (
+    checkpoint_for_ref,
     decision_event_for_ref,
     ObjectNotFoundError,
     inspect_event,
@@ -42,6 +43,7 @@ from tools.orchestration.history import (
     list_aggregate_events,
     list_events,
     list_lease_history,
+    summarize_governance_evidence,
 )
 from tools.orchestration.health import classify_workers
 from tools.orchestration.invariants import InvariantViolationError
@@ -54,6 +56,8 @@ from tools.orchestration.interventions import (
 from tools.orchestration.locks import LockConflictError, inspect_lock, list_locks
 from tools.orchestration.overview import build_overview
 from tools.orchestration.policy import (
+    SURFACE_VERSION_PIN_SELECTOR_ANY,
+    active_governance_snapshot,
     describe_adapter_governance,
     evaluate_decision_rights,
     evaluate_worker_governance,
@@ -67,6 +71,7 @@ from tools.orchestration.recovery import inspect_recovery_context
 from tools.orchestration.setup import (
     build_setup_configuration_snapshot,
     build_setup_dry_run,
+    build_setup_guide,
     build_setup_validation,
     missing_setup_paths,
 )
@@ -84,6 +89,7 @@ from tools.orchestration.workers import (
 from tools.orchestration.routing import RoutingError
 from tools.orchestration.tasks import (
     archive_task,
+    checkpoint_task,
     reconcile_task_recovery,
     freeze_owned_active_tasks_for_worker,
     pause_task,
@@ -180,6 +186,13 @@ def parse_args() -> argparse.Namespace:
         dest="json_output",
         help=argparse.SUPPRESS,
     )
+    guide_parser = setup_subparsers.add_parser("guide", help="show a read-only guided onboarding briefing")
+    guide_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=argparse.SUPPRESS,
+    )
 
     worker_list_parser = worker_subparsers.add_parser("list", help="list known workers")
     worker_list_parser.add_argument("--json", action="store_true", dest="json_output", help=argparse.SUPPRESS)
@@ -252,6 +265,19 @@ def parse_args() -> argparse.Namespace:
     task_inspect_parser.add_argument("--json", action="store_true", dest="json_output", help=argparse.SUPPRESS)
     task_inspect_parser.add_argument("--task", required=True, dest="task_id", help="task id")
     task_inspect_parser.add_argument("--open-pane", action="store_true", dest="open_pane", help="pin and open pane")
+
+    task_checkpoint_parser = task_subparsers.add_parser(
+        "checkpoint",
+        help="capture repo-native diff/review evidence for a task-scoped guarded action",
+    )
+    task_checkpoint_parser.add_argument("--json", action="store_true", dest="json_output", help=argparse.SUPPRESS)
+    task_checkpoint_parser.add_argument("--task", required=True, dest="task_id", help="task id")
+    task_checkpoint_parser.add_argument(
+        "--target-action",
+        required=True,
+        dest="target_action",
+        help="supported checkpoint target action, for example task.close or task.archive",
+    )
 
     for verb in ("close", "archive", "pause", "resume", "abort"):
         task_action_parser = task_subparsers.add_parser(verb, help=f"{verb} a task")
@@ -407,6 +433,8 @@ def emit_setup_result(
                 emit_setup_validate_human_readable(data)
             elif command_name == "macs setup dry-run":
                 emit_setup_dry_run_human_readable(data)
+            elif command_name == "macs setup guide":
+                emit_setup_guide_human_readable(data)
         else:
             if command_name == "macs setup validate" and data.get("outcome"):
                 print(f"Outcome: {data['outcome']}", file=sys.stderr)
@@ -415,6 +443,8 @@ def emit_setup_result(
                     print(f"Next Action: {data['next_action']}", file=sys.stderr)
             else:
                 print(data["message"], file=sys.stderr)
+                if data.get("next_action"):
+                    print(f"Next Action: {data['next_action']}", file=sys.stderr)
     return exit_code
 
 
@@ -442,6 +472,26 @@ def emit_setup_check_human_readable(data: dict[str, object]) -> None:
         f"{', '.join(sorted(data['workflow_defaults'])) if data['workflow_defaults'] else 'none'}"
     )
     print(f"Governance policy: {configuration['governance_policy']['path']}")
+    governance_summary = configuration["governance_policy"].get("summary", {})
+    if isinstance(governance_summary, dict):
+        print(f"Active operating profile: {governance_summary.get('operating_profile', 'unknown')}")
+        snapshot = governance_summary.get("active_snapshot") or {}
+        print(f"Governance snapshot: {format_governance_snapshot_reference(snapshot)}")
+        if snapshot.get("traceability_status") == "stale_vs_live_policy":
+            for line in surface_version_pin_summary_lines(
+                snapshot.get("surface_version_pins"),
+                label="Snapshot-captured surface version pins",
+            ):
+                print(line)
+            for line in secret_scope_summary_lines(
+                snapshot.get("secret_scopes"),
+                label="Snapshot-captured secret scopes",
+            ):
+                print(line)
+        for line in surface_version_pin_summary_lines(governance_summary.get("surface_version_pins")):
+            print(line)
+        for line in secret_scope_summary_lines(governance_summary.get("secret_scopes")):
+            print(line)
     print(f"State layout: {configuration['state_layout']['path']}")
     print("State paths:")
     for key, value in data["state_paths"].items():
@@ -480,12 +530,18 @@ def emit_setup_validate_human_readable(data: dict[str, object]) -> None:
             if criterion == "failure_mode_matrix":
                 for failure_class in summary.get("failure_classes", []):
                     print(f"  - {failure_class['failure_class']}: {failure_class['outcome']}")
+            if criterion == "governance_hardening":
+                for control in summary.get("controls", []):
+                    evidence_ref = control.get("evidence_ref") or "none"
+                    print(f"  - {control['control_id']}: {control['outcome']} (evidence: {evidence_ref})")
         print("Evidence:")
         print(f"- setup_validation_report: {release_gate['evidence']['setup_validation_report']}")
         for adapter_id, report_path in release_gate["evidence"]["adapter_reports"].items():
             print(f"- adapter_report[{adapter_id}]: {report_path}")
         print(f"- failure_mode_matrix_report: {release_gate['evidence']['failure_mode_matrix_report']}")
         print(f"- restart_recovery_report: {release_gate['evidence']['restart_recovery_report']}")
+        print(f"- governance_hardening_report: {release_gate['evidence']['governance_hardening_report']}")
+        print(f"- governance_hardening_summary_json: {release_gate['evidence']['governance_hardening_summary_json']}")
         print(f"- four_worker_dogfood_report: {release_gate['evidence']['four_worker_dogfood_report']}")
         print(f"- release_gate_report: {release_gate['evidence']['release_gate_report']}")
         print(f"- release_gate_summary_json: {release_gate['evidence']['release_gate_summary_json']}")
@@ -574,6 +630,33 @@ def emit_setup_dry_run_human_readable(data: dict[str, object]) -> None:
     print(f"Next action: {dry_run['next_action']}")
 
 
+def emit_setup_guide_human_readable(data: dict[str, object]) -> None:
+    guide = data["guide"]
+    current_state = guide.get("current_state") or {}
+    orientation = guide.get("orientation") or {}
+    print("Guided setup briefing:")
+    print(orientation.get("summary", "Controller-owned setup guidance."))
+    print(f"Authority: {orientation.get('authority_note', 'Controller facts determine readiness.')}")
+    print(f"Repo: {guide['repo_root']}")
+    print(f"Bootstrap detected: {'yes' if guide['bootstrap_detected'] else 'no'}")
+    print(f"Current phase: {guide['current_phase']}")
+    if current_state.get("outcome"):
+        print(f"Outcome: {current_state['outcome']}")
+        print(f"Safe ready state: {'yes' if current_state.get('safe_ready_state') else 'no'}")
+    print("Next command:")
+    emit_setup_guide_command(guide["next_action"])
+    follow_up_commands = guide.get("follow_up_commands") or []
+    if follow_up_commands:
+        print("Follow-up commands:")
+        for command in follow_up_commands:
+            emit_setup_guide_command(command)
+
+
+def emit_setup_guide_command(command: dict[str, object]) -> None:
+    print(f"[{command['action_type']}] {command['command']}")
+    print(f"  {command['purpose']}")
+
+
 def action_result_with_decision_rights(
     result: dict[str, object] | None,
     decision_rights: dict[str, object] | None,
@@ -627,6 +710,28 @@ def emit_action_error_human(message: str, result: dict[str, object]) -> None:
     if result.get("next_action"):
         for line in key_value_lines("Next Action", result["next_action"], render_context):
             print(line, file=sys.stderr)
+    review_gate = result.get("review_gate")
+    if isinstance(review_gate, dict):
+        gate_outcome = review_gate.get("gate_outcome") or review_gate.get("status")
+        if gate_outcome:
+            for line in key_value_lines("Gate Outcome", str(gate_outcome), render_context):
+                print(line, file=sys.stderr)
+        if review_gate.get("target_action"):
+            for line in key_value_lines("Target Action", str(review_gate["target_action"]), render_context):
+                print(line, file=sys.stderr)
+        checkpoint = review_gate.get("checkpoint")
+        if isinstance(checkpoint, dict) and checkpoint.get("checkpoint_id"):
+            for line in key_value_lines("Checkpoint", str(checkpoint["checkpoint_id"]), render_context):
+                print(line, file=sys.stderr)
+        conflicting_checkpoint = review_gate.get("conflicting_checkpoint")
+        if isinstance(conflicting_checkpoint, dict) and conflicting_checkpoint.get("checkpoint_id"):
+            for line in key_value_lines("Conflicting Checkpoint", str(conflicting_checkpoint["checkpoint_id"]), render_context):
+                print(line, file=sys.stderr)
+        if review_gate.get("decision_event_id"):
+            for line in key_value_lines("Decision Event", str(review_gate["decision_event_id"]), render_context):
+                print(line, file=sys.stderr)
+    for line in secret_resolution_lines(result.get("secret_resolution")):
+        print(line, file=sys.stderr)
     for line in routing_rejection_lines(result.get("routing_evaluation")):
         print(line, file=sys.stderr)
 
@@ -670,6 +775,8 @@ def emit_task_action_result(args: argparse.Namespace, verb: str, action: dict[st
                 print_key_value("Confirmation", confirmation, render_context)
         print_key_value("Worker", result["selected_worker_id"], render_context)
         print_key_value("Lease", result["lease_id"], render_context)
+        for line in secret_resolution_lines(result.get("secret_resolution")):
+            print(line)
         return 0
 
     if verb == "close":
@@ -679,12 +786,59 @@ def emit_task_action_result(args: argparse.Namespace, verb: str, action: dict[st
         print_key_value("State", task["state"], render_context)
         print_key_value("Lease", f"{lease['lease_id']} ({lease['state']})", render_context)
         print_key_value("Locks Released", len(result["locks"]), render_context)
+        print_key_value("Event ID", event["event_id"], render_context)
+        if result.get("checkpoint_id"):
+            print_key_value("Checkpoint", result["checkpoint_id"], render_context)
+        if result.get("decision_event_id"):
+            print_key_value("Decision Event", result["decision_event_id"], render_context)
+        print_key_value(
+            "Controller State Changed",
+            "yes" if result.get("controller_state_changed") else "no",
+            render_context,
+        )
+        if result.get("next_action"):
+            print_key_value("Next Action", result["next_action"], render_context)
         return 0
 
     if verb == "archive":
         task = result["task"]
         print_key_value("Task", task["task_id"], render_context)
         print_key_value("State", task["state"], render_context)
+        print_key_value("Event ID", event["event_id"], render_context)
+        if result.get("checkpoint_id"):
+            print_key_value("Checkpoint", result["checkpoint_id"], render_context)
+        if result.get("decision_event_id"):
+            print_key_value("Decision Event", result["decision_event_id"], render_context)
+        print_key_value(
+            "Controller State Changed",
+            "yes" if result.get("controller_state_changed") else "no",
+            render_context,
+        )
+        if result.get("next_action"):
+            print_key_value("Next Action", result["next_action"], render_context)
+        return 0
+
+    if verb == "checkpoint":
+        task = result["task"]
+        print_key_value("Task", task["task_id"], render_context)
+        print_key_value("State", task["state"], render_context)
+        print_key_value("Checkpoint", result["checkpoint_id"], render_context)
+        print_key_value("Target Action", result["target_action"], render_context)
+        print_key_value("Captured At", result["captured_at"], render_context)
+        print_key_value("Event ID", event["event_id"], render_context)
+        print_key_value(
+            "Controller State Changed",
+            "yes" if result.get("controller_state_changed") else "no",
+            render_context,
+        )
+        baseline = format_checkpoint_baseline_summary(result.get("baseline_fingerprint"))
+        if baseline:
+            print_key_value("Baseline Repo", baseline, render_context)
+        evidence_refs = format_evidence_refs(result.get("artifact_refs"))
+        if evidence_refs:
+            print_key_value("Evidence Refs", evidence_refs, render_context)
+        if result.get("next_action"):
+            print_key_value("Next Action", result["next_action"], render_context)
         return 0
 
     if verb in {"pause", "resume", "reroute"}:
@@ -1062,6 +1216,8 @@ def format_affected_refs(affected_refs: object) -> str | None:
         "task_id": "task",
         "lease_id": "lease",
         "worker_id": "worker",
+        "surface_id": "surface",
+        "secret_ref": "secret_ref",
         "recovery_run_id": "recovery",
         "replacement_lease_id": "replacement_lease",
         "previous_lease_id": "previous_lease",
@@ -1074,6 +1230,8 @@ def format_affected_refs(affected_refs: object) -> str | None:
         "task_id",
         "lease_id",
         "worker_id",
+        "surface_id",
+        "secret_ref",
         "recovery_run_id",
         "replacement_lease_id",
         "previous_lease_id",
@@ -1086,9 +1244,193 @@ def format_affected_refs(affected_refs: object) -> str | None:
     return " ".join(parts) if parts else None
 
 
-def load_active_governance_policy(repo_root: Path) -> tuple[Path, dict[str, object]]:
+def format_evidence_refs(evidence_refs: object) -> str | None:
+    if not isinstance(evidence_refs, dict):
+        return None
+    preferred_keys = (
+        "bundle_dir",
+        "metadata_json",
+        "head_ref",
+        "git_status",
+        "git_diff",
+        "git_diff_cached",
+    )
+    parts = []
+    for key in preferred_keys:
+        value = evidence_refs.get(key)
+        if value is not None:
+            parts.append(f"{key}={value}")
+    return " ".join(parts) if parts else None
+
+
+def format_checkpoint_baseline_summary(baseline_fingerprint: object) -> str | None:
+    if not isinstance(baseline_fingerprint, dict):
+        return None
+    head = baseline_fingerprint.get("head") or {}
+    dirty_state = baseline_fingerprint.get("dirty_state") or {}
+    affected_paths = baseline_fingerprint.get("affected_paths") or []
+    parts = [f"head_state={head.get('state') or 'unknown'}"]
+    if head.get("oid"):
+        parts.append(f"head_oid={str(head['oid'])[:12]}")
+    if head.get("ref"):
+        parts.append(f"head_ref={head['ref']}")
+    parts.append(f"tracked_changes={dirty_state.get('tracked_change_count', 0)}")
+    parts.append(f"untracked={dirty_state.get('untracked_count', 0)}")
+    parts.append(f"paths={len(affected_paths)}")
+    return " ".join(parts)
+
+
+def render_checkpoint_ref_line(checkpoint: dict[str, object]) -> str:
+    segments = [
+        str(checkpoint.get("checkpoint_id") or "unknown"),
+        str(checkpoint.get("target_action") or "unknown"),
+        f"actor={checkpoint.get('actor_id') or 'unknown'}",
+        f"captured={checkpoint.get('captured_at') or 'unknown'}",
+    ]
+    if checkpoint.get("event_id"):
+        segments.append(f"event={checkpoint['event_id']}")
+    if checkpoint.get("decision_event_id"):
+        segments.append(f"decision={checkpoint['decision_event_id']}")
+    baseline = format_checkpoint_baseline_summary(checkpoint.get("baseline_fingerprint"))
+    if baseline:
+        segments.append(baseline)
+    evidence_refs = format_evidence_refs(checkpoint.get("evidence_refs"))
+    if evidence_refs:
+        segments.append(evidence_refs)
+    return "  ".join(segments)
+
+
+def format_governance_policy_trace(policy: object) -> str | None:
+    if not isinstance(policy, dict):
+        return None
+    snapshot = policy.get("snapshot") or {}
+    parts = [
+        f"version={policy.get('policy_version') or 'unknown'}",
+        f"path={policy.get('policy_path') or 'unknown'}",
+    ]
+    if isinstance(snapshot, dict) and snapshot.get("snapshot_id"):
+        parts.append(f"snapshot={snapshot['snapshot_id']}")
+        if snapshot.get("traceability_status"):
+            parts.append(f"traceability={snapshot['traceability_status']}")
+    return " ".join(parts)
+
+
+def governance_evidence_lines(evidence: object) -> list[str]:
+    if not isinstance(evidence, dict):
+        return []
+    lines = ["Governance Evidence:"]
+    policy_trace = format_governance_policy_trace(evidence.get("policy"))
+    if policy_trace:
+        lines.append(f"Policy Traceability: {policy_trace}")
+
+    routing = evidence.get("routing")
+    if isinstance(routing, dict):
+        segments = [
+            f"decision={routing.get('decision_id') or 'unknown'}",
+            f"worker={routing.get('selected_worker_id') or 'none'}",
+        ]
+        if routing.get("related_event_id"):
+            segments.append(f"event={routing['related_event_id']}")
+        lines.append(f"Routing Evidence: {' '.join(segments)}")
+
+    version_pins = evidence.get("version_pins")
+    if isinstance(version_pins, dict) and version_pins.get("surface_results"):
+        lines.append("Version Pin Evidence:")
+        for surface in version_pins["surface_results"]:
+            if not isinstance(surface, dict):
+                continue
+            selector_context = surface.get("selector_context") or {}
+            expected = surface.get("expected") or {}
+            observed = format_surface_version_observed({"observed": surface.get("observed")})
+            expected_runtime = ",".join(expected.get("runtime_identities", [])) or "none"
+            expected_model = ",".join(expected.get("model_identities", [])) or "none"
+            segments = [
+                f"- {surface.get('surface_id') or 'unknown'}: {surface.get('outcome') or 'unknown'}",
+                f"expected=runtime={expected_runtime} model={expected_model}",
+                f"observed={observed}",
+                (
+                    "selector="
+                    f"adapter={selector_context.get('adapter_id')} "
+                    f"workflow={selector_context.get('workflow_class')} "
+                    f"profile={selector_context.get('operating_profile')}"
+                ),
+            ]
+            if surface.get("reason"):
+                segments.append(f"reason={surface['reason']}")
+            if surface.get("routing_decision_id"):
+                segments.append(f"route={surface['routing_decision_id']}")
+            if surface.get("related_event_id"):
+                segments.append(f"event={surface['related_event_id']}")
+            lines.append(" ".join(segments))
+
+    secret_scope = evidence.get("secret_scope")
+    if isinstance(secret_scope, dict) and secret_scope.get("surface_results"):
+        lines.append("Secret Scope Evidence:")
+        for surface in secret_scope["surface_results"]:
+            if not isinstance(surface, dict):
+                continue
+            selector_context = surface.get("selector_context") or {}
+            secret_refs = ",".join(str(item) for item in surface.get("secret_refs", [])) or "none"
+            segments = [
+                f"- {surface.get('surface_id') or 'unknown'}: {surface.get('outcome') or 'unknown'}",
+                f"secret_ref={secret_refs}",
+                (
+                    "selector="
+                    f"adapter={selector_context.get('adapter_id')} "
+                    f"workflow={selector_context.get('workflow_class')} "
+                    f"profile={selector_context.get('operating_profile')}"
+                ),
+            ]
+            if surface.get("reason"):
+                segments.append(f"reason={surface['reason']}")
+            if surface.get("routing_decision_id"):
+                segments.append(f"route={surface['routing_decision_id']}")
+            if surface.get("related_event_id"):
+                segments.append(f"event={surface['related_event_id']}")
+            lines.append(" ".join(segments))
+
+    checkpoint = evidence.get("checkpoint")
+    if isinstance(checkpoint, dict):
+        segments = [
+            str(checkpoint.get("checkpoint_id") or "none"),
+            str(checkpoint.get("target_action") or "unknown"),
+            f"actor={checkpoint.get('actor_id') or 'unknown'}",
+        ]
+        if checkpoint.get("captured_at"):
+            segments.append(f"captured={checkpoint['captured_at']}")
+        if checkpoint.get("event_id"):
+            segments.append(f"event={checkpoint['event_id']}")
+        if checkpoint.get("decision_event_id"):
+            segments.append(f"decision={checkpoint['decision_event_id']}")
+        if checkpoint.get("baseline_summary"):
+            segments.append(str(checkpoint["baseline_summary"]))
+        evidence_refs = format_evidence_refs(checkpoint.get("evidence_refs"))
+        if evidence_refs:
+            segments.append(evidence_refs)
+        lines.append("Checkpoint Evidence:")
+        lines.append(f"- {' '.join(segments)}")
+
+    decision_event = evidence.get("decision_event")
+    if isinstance(decision_event, dict):
+        segments = [
+            f"event={decision_event.get('event_id') or 'unknown'}",
+            f"actor={decision_event.get('actor_id') or 'unknown'}",
+        ]
+        if decision_event.get("decision_action"):
+            segments.append(f"action={decision_event['decision_action']}")
+        if decision_event.get("checkpoint_id"):
+            segments.append(f"checkpoint={decision_event['checkpoint_id']}")
+        lines.append(f"Decision Linkage: {' '.join(segments)}")
+    return lines
+
+
+def load_active_governance_policy(
+    repo_root: Path,
+    *,
+    persist_sanitized: bool = True,
+) -> tuple[Path, dict[str, object]]:
     policy_path = governance_policy_path(repo_root / ".codex" / "orchestration")
-    return policy_path, load_governance_policy(policy_path)
+    return policy_path, load_governance_policy(policy_path, persist_sanitized=persist_sanitized)
 
 
 def governance_summary_for_worker(
@@ -1096,14 +1438,23 @@ def governance_summary_for_worker(
     worker: dict[str, object],
     *,
     workflow_class: str | None = None,
+    adapter_evidence: list[dict[str, object]] | None = None,
+    registration_scope: bool = False,
+    persist_sanitized: bool = True,
 ) -> dict[str, object]:
-    policy_path, governance_policy = load_active_governance_policy(repo_root)
+    policy_path, governance_policy = load_active_governance_policy(
+        repo_root,
+        persist_sanitized=persist_sanitized,
+    )
     adapter_descriptor = get_adapter(str(worker["adapter_id"])).descriptor()
     summary = evaluate_worker_governance(
         worker,
         adapter_descriptor,
         governance_policy,
         workflow_class=workflow_class,
+        adapter_evidence=adapter_evidence,
+        enforce_surface_version_pins=adapter_evidence is not None,
+        registration_scope=registration_scope,
     )
     summary["policy_path"] = str(policy_path)
     return summary
@@ -1116,12 +1467,24 @@ def adapter_governance_summary(
     workflow_class: str | None = None,
 ) -> dict[str, object]:
     policy_path, governance_policy = load_active_governance_policy(repo_root)
+    declared_surface_ids = []
+    for surface_id in adapter_descriptor.get("governed_surfaces", []):
+        value = str(surface_id).strip()
+        if value:
+            declared_surface_ids.append(value)
     summary = describe_adapter_governance(
         adapter_descriptor,
         governance_policy,
         workflow_class=workflow_class,
     )
     summary["policy_path"] = str(policy_path)
+    summary["active_snapshot"] = active_governance_snapshot(
+        build_paths(repo_root).state_db,
+        live_policy=governance_policy,
+        workflow_class=workflow_class,
+        adapter_id=str(adapter_descriptor["adapter_id"]),
+        surface_ids=declared_surface_ids,
+    )
     return summary
 
 
@@ -1142,6 +1505,175 @@ def format_governance_summary(governance: object) -> str | None:
     return ", ".join(parts)
 
 
+def surface_version_enforcement_lines(summary: object) -> list[str]:
+    if not isinstance(summary, dict):
+        return []
+    blocked_surfaces = summary.get("blocked_surfaces") or []
+    evaluated_surfaces = summary.get("evaluated_surfaces") or []
+    if summary.get("effective_state") == "none_configured":
+        return []
+    if summary.get("evaluation_state") == "probe_required":
+        return ["Surface Version Enforcement: probe required for applicable pins"]
+    if not evaluated_surfaces:
+        return []
+    lines = ["Surface Version Enforcement:"]
+    for surface in evaluated_surfaces:
+        if not isinstance(surface, dict):
+            continue
+        surface_id = surface.get("surface_id", "unknown")
+        blocked = next((item for item in blocked_surfaces if item.get("surface_id") == surface_id), None)
+        if isinstance(blocked, dict):
+            lines.append(
+                f"- {surface_id}: blocked {blocked.get('reason')} "
+                f"expected={format_surface_version_expectations(blocked)} "
+                f"observed={format_surface_version_observed(blocked)}"
+            )
+        else:
+            lines.append(
+                f"- {surface_id}: matched expected={format_surface_version_expectations(surface)} "
+                f"observed={format_surface_version_observed(surface)}"
+            )
+    return lines
+
+
+def surface_version_pin_summary_lines(version_pins: object, *, label: str = "Surface version pins") -> list[str]:
+    if not isinstance(version_pins, dict):
+        return []
+    state = version_pins.get("state")
+    effective_state = version_pins.get("effective_state")
+    effective_pins = version_pins.get("effective_pins") or []
+    if state == "none_configured":
+        return [f"{label}: none configured"]
+    if effective_state == "no_matching_pins":
+        return [f"{label}: configured, but none apply to the current inspection context"]
+    if not effective_pins:
+        return [f"{label}: configured"]
+    lines = [f"{label}:"]
+    for pin in effective_pins:
+        if isinstance(pin, dict):
+            lines.append(f"- {format_surface_version_pin(pin)}")
+    return lines
+
+
+def secret_scope_summary_lines(secret_scopes: object, *, label: str = "Secret scopes") -> list[str]:
+    if not isinstance(secret_scopes, dict):
+        return []
+    state = secret_scopes.get("state")
+    effective_state = secret_scopes.get("effective_state")
+    effective_scopes = secret_scopes.get("effective_scopes") or []
+    if state == "none_configured":
+        return [f"{label}: none configured"]
+    if effective_state == "no_matching_scopes":
+        return [f"{label}: configured, but none apply to the current inspection context"]
+    if not effective_scopes:
+        return [f"{label}: configured"]
+    lines = [f"{label}:"]
+    for scope in effective_scopes:
+        if isinstance(scope, dict):
+            lines.append(f"- {format_secret_scope(scope)}")
+    return lines
+
+
+def format_governance_snapshot_reference(snapshot: object) -> str:
+    if not isinstance(snapshot, dict):
+        return "none"
+    snapshot_id = str(snapshot.get("snapshot_id") or "none")
+    traceability_status = snapshot.get("traceability_status")
+    if traceability_status == "matches_live_policy":
+        return f"{snapshot_id} (matches live governance policy)"
+    if traceability_status == "stale_vs_live_policy":
+        return f"{snapshot_id} (stale relative to live governance policy)"
+    if traceability_status == "snapshot_record_missing":
+        return f"{snapshot_id} (snapshot record missing)"
+    return snapshot_id
+
+
+def format_surface_version_pin(pin: dict[str, object]) -> str:
+    runtime_identity = pin.get("expected_runtime_identity") or "none"
+    model_identity = pin.get("expected_model_identity") or "none"
+    return (
+        f"surface={pin.get('surface_id')} "
+        f"adapter={pin.get('adapter_id')} "
+        f"workflow={pin.get('workflow_class')} "
+        f"profile={pin.get('operating_profile')} "
+        f"runtime={runtime_identity} "
+        f"model={model_identity}"
+    )
+
+
+def format_secret_scope(scope: dict[str, object]) -> str:
+    parts = [
+        f"surface={scope.get('surface_id')}",
+        f"adapter={scope.get('adapter_id')}",
+        f"workflow={scope.get('workflow_class')}",
+        f"profile={scope.get('operating_profile')}",
+        f"secret_ref={scope.get('secret_ref')}",
+    ]
+    if scope.get("display_name"):
+        parts.append(f"display={scope['display_name']}")
+    parts.append(f"redaction={scope.get('redaction_label') or 'redacted'}")
+    return " ".join(parts)
+
+
+def secret_resolution_lines(secret_resolution: object, *, label: str = "Secret Resolution") -> list[str]:
+    if not isinstance(secret_resolution, dict):
+        return []
+    status = str(secret_resolution.get("status") or "")
+    if not status or status == "not_required":
+        return []
+    lines = [f"{label}: {status}"]
+    for surface in secret_resolution.get("surface_summaries", []):
+        if not isinstance(surface, dict):
+            continue
+        refs = surface.get("resolved_secret_refs") or surface.get("required_secret_refs") or surface.get("unresolved_secret_refs") or []
+        selector_context = surface.get("selector_context") or {}
+        selector_bits = [
+            f"adapter={selector_context.get('adapter_id')}",
+            f"workflow={selector_context.get('workflow_class')}",
+            f"profile={selector_context.get('operating_profile')}",
+        ]
+        refs_label = ",".join(str(item) for item in refs) if refs else "none"
+        reason = surface.get("reason")
+        if reason:
+            lines.append(
+                f"- {surface.get('surface_id')}: blocked {reason} "
+                f"secret_ref={refs_label} {' '.join(selector_bits)}"
+            )
+        else:
+            lines.append(
+                f"- {surface.get('surface_id')}: resolved secret_ref={refs_label} "
+                f"{' '.join(selector_bits)} delivery={surface.get('delivery_mode')}"
+            )
+    return lines
+
+
+def format_surface_version_expectations(surface: dict[str, object]) -> str:
+    pins = surface.get("applicable_pins") or []
+    runtime_values = sorted({str(pin.get("expected_runtime_identity")) for pin in pins if pin.get("expected_runtime_identity")})
+    model_values = sorted({str(pin.get("expected_model_identity")) for pin in pins if pin.get("expected_model_identity")})
+    runtime_label = ",".join(runtime_values) if runtime_values else "none"
+    model_label = ",".join(model_values) if model_values else "none"
+    return f"runtime={runtime_label} model={model_label}"
+
+
+def format_surface_version_observed(surface: dict[str, object]) -> str:
+    observed = surface.get("observed") or {}
+    runtime = observed.get("runtime_identity") or {}
+    model = observed.get("model_identity") or {}
+    runtime_identity = runtime.get("identity") or "none"
+    model_identity = model.get("identity") or "none"
+    confidence = model.get("confidence") or runtime.get("confidence") or "unknown"
+    freshness = model.get("freshness_seconds")
+    if freshness is None:
+        freshness = runtime.get("freshness_seconds")
+    source_ref = model.get("source_ref") or runtime.get("source_ref") or "unknown"
+    freshness_label = f"{freshness}s" if freshness is not None else "unknown"
+    return (
+        f"runtime={runtime_identity} model={model_identity} "
+        f"confidence={confidence} freshness={freshness_label} source={source_ref}"
+    )
+
+
 def routing_rejection_lines(routing_evaluation: object) -> list[str]:
     if not isinstance(routing_evaluation, dict):
         return []
@@ -1153,6 +1685,33 @@ def routing_rejection_lines(routing_evaluation: object) -> list[str]:
         reasons = ", ".join(worker.get("reasons", [])) or "none"
         lines.append(f"- {worker['worker_id']}: {reasons}")
     return lines
+
+
+def worker_registration_block_message(
+    *,
+    worker_id: str,
+    governance: dict[str, object],
+    policy_path: object,
+) -> tuple[str, str]:
+    summary = governance.get("surface_version_pins") if isinstance(governance, dict) else {}
+    blocked_surfaces = summary.get("blocked_surfaces") if isinstance(summary, dict) else []
+    reason_labels = []
+    for prefix, label in (
+        ("surface_version_pin_mismatch", "mismatch"),
+        ("surface_version_evidence_missing", "missing evidence"),
+        ("surface_version_evidence_stale", "stale evidence"),
+        ("surface_version_evidence_untrusted", "low-trust evidence"),
+    ):
+        if any(isinstance(item, dict) and str(item.get("reason", "")).startswith(prefix) for item in blocked_surfaces or []):
+            reason_labels.append(label)
+    suffix = f" ({', '.join(reason_labels)})" if reason_labels else ""
+    policy_ref = str(policy_path) if policy_path else "governance policy"
+    message = (
+        f"Worker {worker_id} was quarantined during registration because surface version pin enforcement "
+        f"blocked ready-state promotion{suffix}"
+    )
+    next_action = f"inspect worker {worker_id}, review {policy_ref}, refresh trustworthy runtime or model evidence, then retry registration"
+    return message, next_action
 
 
 def audit_content_lines(event: dict[str, object]) -> list[str]:
@@ -1174,6 +1733,10 @@ def render_event_ref_line(event: dict[str, object]) -> str:
     segments = [event["event_id"], event["event_type"]]
     if event.get("actor_id"):
         segments.append(f"actor={event['actor_id']}")
+    if event.get("checkpoint_id"):
+        segments.append(f"checkpoint={event['checkpoint_id']}")
+    if event.get("target_action"):
+        segments.append(f"target={event['target_action']}")
     if event.get("decision_event_id"):
         segments.append(f"decision={event['decision_event_id']}")
     if event.get("causation_id"):
@@ -1197,6 +1760,8 @@ def emit_worker_inspect_human_readable(worker: dict[str, object]) -> None:
     governance_summary = format_governance_summary(worker.get("governance"))
     if governance_summary is not None:
         print_key_value("Governed Surfaces", governance_summary, render_context)
+    for line in surface_version_enforcement_lines((worker.get("governance") or {}).get("surface_version_pins")):
+        print(line)
     for warning in worker_inspect_warnings(worker):
         print(f"Warning: {warning}")
     print("Controller Truth:")
@@ -1248,6 +1813,10 @@ def emit_task_inspect_human_readable(task: dict[str, object]) -> None:
     governance_summary = format_governance_summary(task.get("governance"))
     if governance_summary is not None:
         print_key_value("Governed Surfaces", governance_summary, render_context)
+    for line in surface_version_enforcement_lines((task.get("governance") or {}).get("surface_version_pins")):
+        print(line)
+    for line in secret_resolution_lines(task.get("secret_resolution")):
+        print(line)
     for warning in task_inspect_warnings(task):
         print(f"Warning: {warning}")
     print("Controller Truth:")
@@ -1301,6 +1870,13 @@ def emit_task_inspect_human_readable(task: dict[str, object]) -> None:
             print_key_value("Routing Summary", routing["rationale"], render_context)
     for line in routing_rejection_lines((task.get("routing_decision") or {}).get("rationale")):
         print(line)
+    for line in governance_evidence_lines(task.get("governance_evidence")):
+        print(line)
+    recent_checkpoints = controller_truth.get("recent_checkpoint_refs") or []
+    if recent_checkpoints:
+        print("Recent Checkpoints:")
+        for checkpoint in recent_checkpoints:
+            print(render_checkpoint_ref_line(checkpoint))
     print("Recent Events:")
     for event in controller_truth["recent_event_refs"]:
         print(render_event_ref_line(event))
@@ -1494,6 +2070,15 @@ def handle_setup_dry_run(args: argparse.Namespace) -> int:
     return emit_setup_result(args, True, "macs setup dry-run", data, 0)
 
 
+def handle_setup_guide(args: argparse.Namespace) -> int:
+    repo_root = Path(args.repo).resolve()
+    paths = build_paths(repo_root)
+    data = {
+        "guide": build_setup_guide(repo_root, paths),
+    }
+    return emit_setup_result(args, True, "macs setup guide", data, 0)
+
+
 def load_repo_adapter_settings(paths) -> dict[str, object]:
     return load_adapter_settings(paths.adapter_settings_path)
 
@@ -1618,14 +2203,84 @@ def handle_worker_command(args: argparse.Namespace) -> int:
             except RuntimeError as exc:
                 worker["adapter_evidence"] = []
                 worker["adapter_probe_warning"] = str(exc)
-            worker["governance"] = governance_summary_for_worker(repo_root, worker)
+            worker["governance"] = governance_summary_for_worker(
+                repo_root,
+                worker,
+                adapter_evidence=worker.get("adapter_evidence"),
+            )
+            if worker.get("adapter_probe_warning"):
+                worker["governance"]["surface_version_pins"]["probe_error"] = worker["adapter_probe_warning"]
             if getattr(args, "open_pane", False):
                 worker["pane_navigation"] = open_pane_target(repo_root, worker["controller_truth"]["pane_target"])
             data = {"worker": worker}
         elif args.verb == "register":
             get_adapter(args.adapter_id)
             ensure_adapter_enabled_for_repo(paths, args.adapter_id)
-            data = {"worker": register_worker(paths.state_db, paths.events_ndjson, args.worker_id, args.adapter_id)}
+            worker = inspect_worker(paths.state_db, args.worker_id)
+            registration_worker = dict(worker)
+            registration_worker["adapter_id"] = args.adapter_id
+            registration_governance = governance_summary_for_worker(
+                repo_root,
+                registration_worker,
+                workflow_class=SURFACE_VERSION_PIN_SELECTOR_ANY,
+                registration_scope=True,
+            )
+            adapter_probe_warning = None
+            if registration_governance["surface_version_pins"].get("probe_required"):
+                try:
+                    adapter_evidence = get_adapter(args.adapter_id).probe(registration_worker)
+                except RuntimeError as exc:
+                    adapter_evidence = []
+                    adapter_probe_warning = str(exc)
+                registration_governance = governance_summary_for_worker(
+                    repo_root,
+                    registration_worker,
+                    workflow_class=SURFACE_VERSION_PIN_SELECTOR_ANY,
+                    adapter_evidence=adapter_evidence,
+                    registration_scope=True,
+                )
+                if adapter_probe_warning is not None:
+                    registration_governance["surface_version_pins"]["probe_error"] = adapter_probe_warning
+            target_state = "quarantined" if not registration_governance["surface_version_pins"].get("eligible", True) else "ready"
+            registered_worker = register_worker(
+                paths.state_db,
+                paths.events_ndjson,
+                args.worker_id,
+                args.adapter_id,
+                target_state=target_state,
+                event_payload={"governance": registration_governance},
+            )
+            registered_worker["governance"] = registration_governance
+            if target_state == "quarantined":
+                frozen = freeze_owned_active_tasks_for_worker(
+                    paths.state_db,
+                    paths.events_ndjson,
+                    worker_id=args.worker_id,
+                    worker_state=registered_worker["state"],
+                    evidence_summary={
+                        "worker_id": args.worker_id,
+                        "surface_version_pins": registration_governance["surface_version_pins"],
+                    },
+                )
+                message, next_action = worker_registration_block_message(
+                    worker_id=args.worker_id,
+                    governance=registration_governance,
+                    policy_path=registration_governance.get("policy_path"),
+                )
+                return emit_result(
+                    args,
+                    False,
+                    {
+                        "message": message,
+                        "next_action": next_action,
+                        "worker": registered_worker,
+                        "governance": registration_governance,
+                        "controller_state_changed": True,
+                        "frozen_tasks": [item["result"]["task"]["task_id"] for item in frozen],
+                    },
+                    4,
+                )
+            data = {"worker": registered_worker, "governance": registration_governance}
         elif args.verb == "enable":
             data = {"worker": set_worker_state(paths.state_db, paths.events_ndjson, args.worker_id, "ready")}
         elif args.verb == "disable":
@@ -1774,16 +2429,42 @@ def handle_adapter_command(args: argparse.Namespace) -> int:
         governance = data.get("governance")
         if isinstance(governance, dict):
             print(f"Governance Policy: {governance.get('policy_version')}")
+            print(f"Active operating profile: {governance.get('operating_profile', 'unknown')}")
+            snapshot = governance.get("active_snapshot") or {}
+            print(f"Governance snapshot: {format_governance_snapshot_reference(snapshot)}")
+            if snapshot.get("traceability_status") == "stale_vs_live_policy":
+                for line in surface_version_pin_summary_lines(
+                    snapshot.get("surface_version_pins"),
+                    label="Snapshot-captured surface version pins",
+                ):
+                    print(line)
+                for line in secret_scope_summary_lines(
+                    snapshot.get("secret_scopes"),
+                    label="Snapshot-captured secret scopes",
+                ):
+                    print(line)
             declared = governance.get("declared_surfaces") or []
             if declared:
                 print("Declared Governed Surfaces:")
                 for surface in declared:
                     status = "allowlisted" if surface.get("allowlisted") else "blocked"
+                    if surface.get("requires_secret"):
+                        status += " secret-required"
                     if surface.get("pinned_adapters"):
                         status += f" pinned={','.join(surface['pinned_adapters'])}"
+                    version_pins = surface.get("applicable_version_pins") or []
+                    if version_pins:
+                        status += f" version-pin={'; '.join(format_surface_version_pin(pin) for pin in version_pins)}"
+                    secret_scopes = surface.get("applicable_secret_scopes") or []
+                    if secret_scopes:
+                        status += f" secret-scope={'; '.join(format_secret_scope(scope) for scope in secret_scopes)}"
                     print(f"- {surface['surface_id']} ({status})")
             else:
                 print("Declared Governed Surfaces: none")
+            for line in surface_version_pin_summary_lines(governance.get("surface_version_pins")):
+                print(line)
+            for line in secret_scope_summary_lines(governance.get("secret_scopes")):
+                print(line)
     return 0
 
 
@@ -1819,7 +2500,16 @@ def handle_task_command(args: argparse.Namespace) -> int:
                     repo_root,
                     worker,
                     workflow_class=str(task["workflow_class"]),
+                    adapter_evidence=task.get("adapter_evidence"),
+                    persist_sanitized=False,
                 )
+                if task.get("adapter_probe_warning"):
+                    task["governance"]["surface_version_pins"]["probe_error"] = task["adapter_probe_warning"]
+            task["governance_evidence"] = summarize_governance_evidence(
+                paths.state_db,
+                task=task,
+                governance=task.get("governance"),
+            )
             if getattr(args, "open_pane", False):
                 task["pane_navigation"] = open_pane_target(repo_root, task["controller_truth"]["pane_target"])
             data = {"task": task}
@@ -1842,13 +2532,25 @@ def handle_task_command(args: argparse.Namespace) -> int:
             return emit_task_action_result(args, args.verb, action)
         elif args.verb == "close":
             action = close_task(
+                repo_root,
                 paths.state_db,
                 paths.events_ndjson,
                 task_id=args.task_id,
             )
             return emit_task_action_result(args, args.verb, action)
+        elif args.verb == "checkpoint":
+            action = checkpoint_task(
+                repo_root,
+                paths.checkpoints_dir,
+                paths.state_db,
+                paths.events_ndjson,
+                task_id=args.task_id,
+                target_action=args.target_action,
+            )
+            return emit_task_action_result(args, args.verb, action)
         elif args.verb == "archive":
             action = archive_task(
+                repo_root,
                 paths.state_db,
                 paths.events_ndjson,
                 task_id=args.task_id,
@@ -2159,7 +2861,17 @@ def handle_event_command(args: argparse.Namespace) -> int:
         if args.verb == "list":
             data = {"events": list_events(paths.state_db)}
         else:
-            data = {"event": inspect_event(paths.state_db, args.event_id)}
+            event = inspect_event(paths.state_db, args.event_id)
+            data = {"event": event}
+            checkpoint = checkpoint_for_ref(paths.state_db, event)
+            if checkpoint is not None:
+                data["checkpoint"] = checkpoint
+            decision_event = decision_event_for_ref(paths.state_db, event)
+            if decision_event is not None:
+                data["decision_event"] = decision_event
+            governance_evidence = summarize_governance_evidence(paths.state_db, event=event)
+            if governance_evidence is not None:
+                data["governance_evidence"] = governance_evidence
     except ObjectNotFoundError as exc:
         return emit_result(args, False, {"message": str(exc)}, 1)
     if args.json_output:
@@ -2201,7 +2913,29 @@ def handle_event_command(args: argparse.Namespace) -> int:
         affected_refs = format_affected_refs(event.get("affected_refs"))
         if affected_refs:
             print_key_value("Affected Refs", affected_refs, render_context)
+        checkpoint = data.get("checkpoint")
+        if isinstance(checkpoint, dict):
+            print_key_value("Checkpoint", checkpoint["checkpoint_id"], render_context)
+            print_key_value("Target Action", checkpoint["target_action"], render_context)
+            print_key_value("Captured At", checkpoint["captured_at"], render_context)
+            baseline = format_checkpoint_baseline_summary(checkpoint.get("baseline_fingerprint"))
+            if baseline:
+                print_key_value("Baseline Repo", baseline, render_context)
+            evidence_refs = format_evidence_refs(checkpoint.get("evidence_refs"))
+            if evidence_refs:
+                print_key_value("Evidence Refs", evidence_refs, render_context)
+        decision_event = data.get("decision_event")
+        if isinstance(decision_event, dict):
+            print_key_value("Decision Event", decision_event["event_id"], render_context)
+            print_key_value("Decision Actor", decision_event["actor_id"], render_context)
+            if decision_event.get("intervention_rationale"):
+                print_key_value("Intervention Rationale", decision_event["intervention_rationale"], render_context)
         for line in audit_content_lines(event):
+            print(line)
+        secret_resolution = (event.get("payload") or {}).get("secret_resolution")
+        for line in secret_resolution_lines(secret_resolution):
+            print(line)
+        for line in governance_evidence_lines(data.get("governance_evidence")):
             print(line)
     return 0
 
@@ -2413,6 +3147,8 @@ def main() -> int:
         return handle_setup_validate(args)
     if args.family == "setup" and args.verb == "dry-run":
         return handle_setup_dry_run(args)
+    if args.family == "setup" and args.verb == "guide":
+        return handle_setup_guide(args)
     if args.family == "worker":
         return handle_worker_command(args)
     if args.family == "adapter":

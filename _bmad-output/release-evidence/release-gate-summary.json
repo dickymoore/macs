@@ -126,7 +126,7 @@
       "suite_stderr_tail": [
         "........",
         "----------------------------------------------------------------------",
-        "Ran 8 tests in 3.310s",
+        "Ran 8 tests in 3.140s",
         "OK"
       ],
       "suite_stdout_tail": []
@@ -138,17 +138,17 @@
       "report_path": "/home/codexuser/macs_dev/_bmad-output/release-evidence/four-worker-dogfood-report.md",
       "timing_envelope": {
         "degraded_warning_visibility": {
-          "actual_seconds": 0.074284,
+          "actual_seconds": 0.06421,
           "result": "PASS",
           "target_seconds": 10.0
         },
         "task_assignment_path": {
-          "actual_seconds": 0.156893,
+          "actual_seconds": 0.107042,
           "result": "PASS",
           "target_seconds": 5.0
         },
         "worker_discovery_or_inspection": {
-          "actual_seconds": 0.097283,
+          "actual_seconds": 0.072155,
           "result": "PASS",
           "target_seconds": 2.0
         }
@@ -160,7 +160,7 @@
           "interruptibility": "interruptible",
           "notes": "controller and adapter evidence available",
           "runtime": "codex",
-          "worker": "worker-codex-macs-dogfood-81d0d714-0"
+          "worker": "worker-codex-macs-dogfood-00b72f9b-0"
         },
         {
           "adapter_version": "phase1-contract",
@@ -168,7 +168,7 @@
           "interruptibility": "interruptible",
           "notes": "controller and adapter evidence available",
           "runtime": "claude",
-          "worker": "worker-claude-macs-dogfood-81d0d714-1"
+          "worker": "worker-claude-macs-dogfood-00b72f9b-1"
         },
         {
           "adapter_version": "phase1-contract",
@@ -176,7 +176,7 @@
           "interruptibility": "interruptible",
           "notes": "controller and adapter evidence available",
           "runtime": "gemini",
-          "worker": "worker-gemini-macs-dogfood-81d0d714-2"
+          "worker": "worker-gemini-macs-dogfood-00b72f9b-2"
         },
         {
           "adapter_version": "phase1-contract",
@@ -184,7 +184,7 @@
           "interruptibility": "interruptible",
           "notes": "controller and adapter evidence available",
           "runtime": "local",
-          "worker": "worker-local-macs-dogfood-81d0d714-3"
+          "worker": "worker-local-macs-dogfood-00b72f9b-3"
         }
       ]
     },
@@ -202,7 +202,7 @@
       "suite_stderr_tail": [
         "....",
         "----------------------------------------------------------------------",
-        "Ran 4 tests in 0.805s",
+        "Ran 4 tests in 0.850s",
         "OK"
       ],
       "suite_stdout_tail": []
@@ -236,7 +236,7 @@
     "restart_recovery_report": "/home/codexuser/macs_dev/_bmad-output/release-evidence/restart-recovery-verification-report.md",
     "setup_validation_report": "/home/codexuser/macs_dev/_bmad-output/release-evidence/setup-validation-report.md"
   },
-  "generated_at": "2026-04-10T17:51:15+00:00",
+  "generated_at": "2026-04-14T09:49:55+00:00",
   "invocation": "macs setup validate --release-gate",
   "next_actions": [
     "enabled adapter 'claude' runtime is not available on PATH",

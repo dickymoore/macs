@@ -1,0 +1,66 @@
+# generated: 2026-04-14T11:24:00+01:00
+# last_updated: 2026-04-14T11:24:00+01:00
+# project: macs_dev
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: /home/codexuser/macs_dev/_bmad-output/implementation-artifacts/stories
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog -> in-progress: Automatically when first story is created
+#   - in-progress -> done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - This file tracks the initiative-specific MACS guided onboarding planning slice.
+# - Stories remain backlog until dedicated story files are created.
+# - The broader Phase 1 sprint ledger remains authoritative for previously delivered platform work.
+
+generated: 2026-04-14T11:24:00+01:00
+last_updated: 2026-04-14T15:11:06+01:00
+project: macs_dev
+project_key: NOKEY
+tracking_system: file-system
+story_location: /home/codexuser/macs_dev/_bmad-output/implementation-artifacts/stories
+
+development_status:
+  epic-1: in-progress
+  1-1-add-a-guided-onboarding-entry-point: done
+  1-2-summarize-controller-owned-onboarding-state: ready-for-dev
+  1-3-present-the-controller-model-and-conservative-order: backlog
+  epic-1-retrospective: optional
+
+  epic-2: backlog
+  2-1-explain-blocked-and-partial-gaps-with-provenance: backlog
+  2-2-recommend-the-next-safe-onboarding-action: backlog
+  2-3-surface-migration-and-recovery-follow-ups: backlog
+  epic-2-retrospective: optional
+
+  epic-3: backlog
+  3-1-link-guided-output-to-canonical-docs-and-examples: backlog
+  3-2-render-guided-onboarding-for-narrow-and-no-color-terminals: backlog
+  3-3-provide-stable-json-guidance-output: backlog
+  epic-3-retrospective: optional
+
+  epic-4: backlog
+  4-1-preserve-read-only-boundaries-in-guided-onboarding: backlog
+  4-2-regression-cover-blocked-partial-and-pass-guide-states: backlog
+  4-3-publish-contributor-maintenance-guidance-for-onboarding-parity: backlog
+  epic-4-retrospective: optional

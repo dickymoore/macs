@@ -110,6 +110,15 @@ This writes:
 ```
 
 ### 5) Optional: initialize orchestration state directly
+For a read-only onboarding briefing from the canonical setup surface, start here:
+```bash
+./macs setup guide
+./macs setup guide --json
+```
+
+`setup guide` is read-only. It gives you a compact controller-owned briefing and labels recommended follow-up commands explicitly as `[READ-ONLY]` or `[ACTION]`.
+
+If you want to bootstrap immediately, initialize orchestration state directly:
 ```bash
 ./macs setup init
 ```
@@ -230,8 +239,12 @@ Normal task lifecycle work now stays on the `macs task` surface:
 # Or pin an explicit worker.
 ./macs task assign --task <task-id> --worker <worker-id>
 
-# Complete and archive through the same family.
+# Capture a controller-owned review checkpoint before closeout.
+./macs task checkpoint --task <task-id> --target-action task.close
 ./macs task close --task <task-id> --json
+
+# Archive requires its own target-matched checkpoint.
+./macs task checkpoint --task <task-id> --target-action task.archive
 ./macs task archive --task <task-id>
 ```
 
@@ -241,8 +254,8 @@ Operational notes for the current lifecycle surface:
 - A successful `task assign` now dispatches through the worker adapter, promotes the lease to `active`, and activates any reserved locks before returning.
 - `task pause` moves an `active` task to `intervention_hold` and the same live lease to `paused` without minting a replacement lease or releasing protected-surface locks.
 - `task resume` only restores an operator-paused task or lease pair back to `active`; invalid pause or resume requests return explicit contract conflicts.
-- `task close` is the operator verb for canonical task state `completed`; it completes the live lease and releases held locks.
-- `task archive` is only valid from terminal task states such as `completed`, `failed`, or `aborted`.
+- `task close` now fails closed unless a current `task.close` checkpoint exists for the live task scope and repo state; on success it completes the live lease, releases held locks, and records the linked approval event.
+- `task archive` now requires its own current `task.archive` checkpoint and is only valid from terminal task states such as `completed`.
 - When a runtime adapter does not advertise pause or resume depth yet, MACS keeps controller state authoritative and returns an explicit warning instead of pretending the runtime was fully paused.
 - Action errors use stable exit codes: `4` for conflict or policy-blocked cases, `5` for degraded preconditions or still-unsupported verbs, and `6` when a worker side effect fails after the controller has rolled back to an explicit safe state.
 

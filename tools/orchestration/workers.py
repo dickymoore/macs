@@ -363,22 +363,35 @@ def inspect_worker_context(state_db: Path, worker_id: str) -> dict[str, object]:
     return worker
 
 
-def register_worker(state_db: Path, events_ndjson: Path, worker_id: str, adapter_id: str) -> dict[str, object]:
+def register_worker(
+    state_db: Path,
+    events_ndjson: Path,
+    worker_id: str,
+    adapter_id: str,
+    *,
+    target_state: str = "ready",
+    event_type: str | None = None,
+    event_payload: dict[str, object] | None = None,
+) -> dict[str, object]:
+    payload = {"adapter_id": adapter_id, "state": target_state}
+    if isinstance(event_payload, dict):
+        payload.update(event_payload)
     return _update_worker(
         state_db,
         events_ndjson,
         worker_id,
-        event_type="worker.registered",
-        payload={"adapter_id": adapter_id},
+        event_type=event_type or ("worker.quarantined" if target_state == "quarantined" else "worker.registered"),
+        payload=payload,
         updater=lambda conn, row: conn.execute(
             """
             UPDATE workers
-            SET adapter_id = ?, state = CASE WHEN state = 'quarantined' THEN state ELSE 'ready' END,
+            SET adapter_id = ?, state = ?,
                 operator_tags = ?
             WHERE worker_id = ?
             """,
             (
                 adapter_id,
+                "quarantined" if row["state"] == "quarantined" or target_state == "quarantined" else target_state,
                 json.dumps(sorted(set(_load_json_list(row["operator_tags"])) | {"registered"})),
                 worker_id,
             ),

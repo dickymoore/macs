@@ -104,6 +104,9 @@ class ReleaseGateCliTests(unittest.TestCase):
         tmux_binary = shutil.which("tmux")
         if tmux_binary is None:
             self.skipTest("tmux not available")
+        git_binary = shutil.which("git")
+        if git_binary is None:
+            self.skipTest("git not available")
         bin_dir = self.temp_dir / "bin"
         bin_dir.mkdir(exist_ok=True)
 
@@ -114,6 +117,10 @@ class ReleaseGateCliTests(unittest.TestCase):
         tmux_link = bin_dir / "tmux"
         if not tmux_link.exists():
             tmux_link.symlink_to(Path(tmux_binary))
+
+        git_link = bin_dir / "git"
+        if not git_link.exists():
+            git_link.symlink_to(Path(git_binary))
 
         for runtime in ("codex", "claude", "gemini"):
             target = bin_dir / runtime
@@ -162,6 +169,7 @@ class ReleaseGateCliTests(unittest.TestCase):
             [
                 "adapter_qualification",
                 "failure_mode_matrix",
+                "governance_hardening",
                 "reference_dogfood",
                 "restart_recovery",
                 "setup_validation",
@@ -169,6 +177,7 @@ class ReleaseGateCliTests(unittest.TestCase):
         )
         self.assertEqual(release_gate["criteria"]["adapter_qualification"]["outcome"], "PASS")
         self.assertEqual(release_gate["criteria"]["failure_mode_matrix"]["outcome"], "PASS")
+        self.assertEqual(release_gate["criteria"]["governance_hardening"]["outcome"], "PASS")
         self.assertEqual(
             release_gate["criteria"]["failure_mode_matrix"]["failure_classes"][0]["failure_class"],
             "worker_disconnect",
@@ -185,12 +194,23 @@ class ReleaseGateCliTests(unittest.TestCase):
         self.assertTrue(Path(evidence["failure_mode_matrix_report"]).exists())
         self.assertTrue(Path(evidence["restart_recovery_report"]).exists())
         self.assertTrue(Path(evidence["four_worker_dogfood_report"]).exists())
+        self.assertTrue(Path(evidence["governance_hardening_report"]).exists())
+        self.assertTrue(Path(evidence["governance_hardening_summary_json"]).exists())
         self.assertTrue(Path(evidence["release_gate_report"]).exists())
         self.assertTrue(Path(evidence["release_gate_summary_json"]).exists())
         self.assertTrue(Path(evidence["adapter_reports"]["codex"]).exists())
         self.assertTrue(Path(evidence["adapter_reports"]["claude"]).exists())
         self.assertTrue(Path(evidence["adapter_reports"]["gemini"]).exists())
         self.assertTrue(Path(evidence["adapter_reports"]["local"]).exists())
+
+        governance = release_gate["criteria"]["governance_hardening"]
+        self.assertEqual(
+            [control["control_id"] for control in governance["controls"]],
+            ["version_pin", "secret_scope", "checkpoint_gate"],
+        )
+        self.assertTrue(Path(governance["sample_evidence"]["task_inspect_path"]).exists())
+        self.assertTrue(Path(governance["sample_evidence"]["event_inspect_path"]).exists())
+        self.assertTrue(Path(governance["sample_evidence"]["summary_path"]).exists())
 
     def test_release_gate_human_readable_lists_gate_summary_and_evidence(self) -> None:
         self.init_repo()
@@ -207,6 +227,12 @@ class ReleaseGateCliTests(unittest.TestCase):
             env_overrides={"PATH": fake_path},
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+        summary_path = self.repo_root / "_bmad-output" / "release-evidence" / "release-gate-summary.json"
+        release_gate = json.loads(summary_path.read_text(encoding="utf-8"))
+        governance_controls = {
+            control["control_id"]: control["evidence_ref"]
+            for control in release_gate["criteria"]["governance_hardening"]["controls"]
+        }
         self.assertIn("Release Gate Outcome: PASS", result.stdout)
         self.assertIn("Invocation: macs setup validate --release-gate", result.stdout)
         self.assertIn("Criteria:", result.stdout)
@@ -214,10 +240,57 @@ class ReleaseGateCliTests(unittest.TestCase):
         self.assertIn("  - codex: PASS", result.stdout)
         self.assertIn("- failure_mode_matrix: PASS", result.stdout)
         self.assertIn("  - worker_disconnect: PASS", result.stdout)
+        self.assertIn("- governance_hardening: PASS", result.stdout)
+        self.assertIn(
+            f"  - version_pin: PASS (evidence: {governance_controls['version_pin']})",
+            result.stdout,
+        )
+        self.assertIn(
+            f"  - secret_scope: PASS (evidence: {governance_controls['secret_scope']})",
+            result.stdout,
+        )
+        self.assertIn(
+            f"  - checkpoint_gate: PASS (evidence: {governance_controls['checkpoint_gate']})",
+            result.stdout,
+        )
         self.assertIn("- restart_recovery: PASS", result.stdout)
         self.assertIn("- reference_dogfood: PASS", result.stdout)
+        self.assertIn("- governance_hardening_report:", result.stdout)
+        self.assertIn("- governance_hardening_summary_json:", result.stdout)
         self.assertIn("- release_gate_report:", result.stdout)
         self.assertIn("- release_gate_summary_json:", result.stdout)
+
+    def test_release_gate_governance_hardening_report_summarizes_control_coverage(self) -> None:
+        self.init_repo()
+        self.seed_worker_row(worker_id="worker-codex-release", runtime_type="codex", adapter_id="codex")
+        self.seed_worker_row(worker_id="worker-claude-release", runtime_type="claude", adapter_id="claude")
+        self.seed_worker_row(worker_id="worker-gemini-release", runtime_type="gemini", adapter_id="gemini")
+        self.seed_worker_row(worker_id="worker-local-release", runtime_type="local", adapter_id="local")
+        fake_path = self.make_release_gate_path()
+
+        result = self.run_cli(
+            "setup",
+            "validate",
+            "--release-gate",
+            "--json",
+            env_overrides={"PATH": fake_path},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        release_gate = payload["data"]["release_gate"]
+
+        report_path = Path(release_gate["evidence"]["governance_hardening_report"])
+        summary_path = Path(release_gate["evidence"]["governance_hardening_summary_json"])
+        report = report_path.read_text(encoding="utf-8")
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        self.assertIn("Governance Hardening Evidence Report", report)
+        self.assertIn("version_pin", report)
+        self.assertIn("secret_scope", report)
+        self.assertIn("checkpoint_gate", report)
+        self.assertEqual(summary["sample_evidence"]["version_pin"]["outcome"], "matched")
+        self.assertEqual(summary["sample_evidence"]["secret_scope"]["outcome"], "resolved")
+        self.assertEqual(summary["sample_evidence"]["checkpoint_gate"]["decision_linkage"], "present")
 
 
 if __name__ == "__main__":

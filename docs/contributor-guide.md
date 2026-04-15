@@ -18,7 +18,7 @@ If you only need to extend a runtime adapter, read [Adapter Contributor Guide](.
 | `README.md` | Project overview, quick start, and top-level validation entry points |
 | `docs/` | End-user and contributor documentation |
 | `tools/orchestration/cli/main.py` | CLI family and verb wiring |
-| `tools/orchestration/setup.py` | Bootstrap, setup check, dry-run, and setup validation |
+| `tools/orchestration/setup.py` | Guided onboarding, bootstrap, setup check, dry-run, and setup validation |
 | `tools/orchestration/tasks.py` | Task lifecycle, assignment, pause or resume, and intervention actions |
 | `tools/orchestration/workers.py` | Worker discovery, registration, and governance |
 | `tools/orchestration/routing.py` | Worker selection and routing decisions |
@@ -35,7 +35,7 @@ If you only need to extend a runtime adapter, read [Adapter Contributor Guide](.
 
 ### 1. Start from the live behavior
 
-Use `./macs --help` and the family-level `--help` surfaces before you edit docs or examples. Planning artifacts are useful context, but examples must match what actually shipped.
+Use `./macs --help` and the family-level `--help` surfaces before you edit docs or examples. For setup and onboarding work, inspect `./macs setup --help` and `./macs setup guide` first. Planning artifacts are useful context, but examples must match what actually shipped.
 
 ### 2. Change the narrowest seam
 

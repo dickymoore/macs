@@ -180,6 +180,34 @@ def adapter_configuration(adapter_settings: dict[str, object], adapter_id: str) 
     return config
 
 
+def resolve_adapter_config_ref(repo_root: Path, adapter_settings: dict[str, object], adapter_id: str) -> Path:
+    config_ref = adapter_configuration(adapter_settings, adapter_id).get("config_ref")
+    text = str(config_ref or ".codex/tmux-worker.env").strip() or ".codex/tmux-worker.env"
+    candidate = Path(text).expanduser()
+    if candidate.is_absolute():
+        return candidate.resolve(strict=False)
+    return (repo_root / candidate).resolve(strict=False)
+
+
+def adapter_secret_source_paths(repo_root: Path, adapter_settings: dict[str, object], adapter_id: str) -> list[Path]:
+    """Return the bounded local secret-source paths for one adapter in precedence order."""
+
+    candidates = [
+        resolve_adapter_config_ref(repo_root, adapter_settings, adapter_id),
+        (repo_root / ".codex" / "tmux-worker.env").expanduser().resolve(strict=False),
+        Path("~/.config/macs/tmux-worker.env").expanduser().resolve(strict=False),
+    ]
+    seen: set[str] = set()
+    ordered: list[Path] = []
+    for path in candidates:
+        marker = str(path)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        ordered.append(path)
+    return ordered
+
+
 def adapter_enabled(adapter_settings: dict[str, object], adapter_id: str) -> bool:
     return bool(adapter_configuration(adapter_settings, adapter_id).get("enabled", True))
 

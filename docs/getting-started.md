@@ -98,6 +98,14 @@ The same bootstrap now creates separate repo-local config files for controller d
 The controller prompt also installs a wrapper for cleaner commands:
 `./.codex/tmux-bridge.sh snapshot|send|status|set_target|notify`
 
+For a read-only onboarding briefing from the canonical setup surface, start with:
+```bash
+./macs setup guide
+./macs setup guide --json
+```
+
+`setup guide` is read-only. It summarizes the current repo-local onboarding state and labels recommended follow-up commands explicitly as `[READ-ONLY]` or `[ACTION]`.
+
 After bootstrap, inspect the active config domains from the controller surface:
 ```bash
 ./macs setup check

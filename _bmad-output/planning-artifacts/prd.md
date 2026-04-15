@@ -144,10 +144,11 @@ The Phase 1 release must meet the following measurable targets:
   - inspect worker state
   - assign work
   - view current ownership and locks
-  - pause
-  - abort
+  - pause and resume
   - reroute
   - trigger recovery/reconciliation
+  - close/archive completed work
+  - inspect explicit guarded high-consequence actions such as `abort`, `lock override`, and `lock release`, which remain CLI-visible but blocked in Phase 1
 - **Failure/recovery coverage target:** the automated release-gate suite must include and pass **100%** of the mandatory failure-mode matrix for:
   - worker disconnect
   - stale lease/session divergence
@@ -158,6 +159,12 @@ The Phase 1 release must meet the following measurable targets:
   - interrupted or partial recovery
 - **Adopter-setup target:** a technically capable adopter must be able to configure a mixed-runtime local-host installation in a real repo using documented setup and configuration, without bespoke per-repo glue code beyond documented extension points.
 - **Real-use target:** the Phase 1 release must demonstrate repeatable successful parallel workflows in the MACS repo. Early external adopter use in a real repository is a strong validation signal and preferred post-release milestone, but not a hard ship blocker if equivalent internal dogfooding evidence exists by release cutoff.
+- **Conflict-prevention target:** 100% of detected write-impacting protected-surface conflicts are blocked before dispatch in passing failure drills, and passing dogfood or release-gate runs show zero silent conflicting assignments.
+- **Stale-lease recovery target:** stale or ambiguous live-lease conditions become operator-visible and assignment-blocking within 60 seconds of detection or startup reconciliation in the reference environment.
+- **Reroute success target:** at least 90% of operator-confirmed reroute attempts in controlled recovery drills complete without violating zero-or-one-live-lease invariants, and 100% of successful reroutes preserve the decision-event causation chain.
+- **Intervention-frequency target:** under the default `primary_plus_fallback` profile, unplanned manual intervention stays below 10% of tasks in reference internal dogfood runs, excluding planned drills and demonstrations.
+- **False-safe-routing target:** zero passing release-gate runs may include an assignment later frozen as unsafe without a contemporaneous warning, policy block, or recovery hold.
+- **Auditable-passing-run target:** 100% of runs counted as PASS must emit a complete evidence package: release-gate summary, human-readable reports, machine-readable artifacts, and correlated event IDs.
 
 ## Product Scope
 
@@ -171,6 +178,7 @@ MVP is the smallest production-grade release that proves MACS can safely orchest
 - explicit operator task lifecycle for assign, inspect, intervene, recover, and close/archive
 - first-class runtime adapters for Codex CLI, Claude Code, Gemini CLI, and one local/runtime-neutral adapter
 - minimum adapter contract with required signals and defined degradation behavior when signals are unavailable
+- explicit BMAD phase-to-runtime policy with shipping-default `primary_plus_fallback` and opt-in `full_hybrid` operating profiles
 - controller-owned routing with evidence-aware worker selection
 - explicit ownership and coarse protected-surface locks for conflict avoidance
 - operator monitoring/intervention across windows
@@ -395,6 +403,14 @@ The product must therefore treat the following as baseline domain requirements:
 - keep privacy-sensitive and offline-capable execution paths available through local/runtime-neutral adapters where feasible
 - treat MCP and other integration surfaces as governed trust boundaries requiring allowlisting/pinning where relevant
 
+Phase 1 product policies turn these expectations into release-blocking rules:
+- `POL-1 No Auto Push`: MACS must never perform `git push`, branch publication, PR merge, release publication, or analogous remote publication automatically. These remain forbidden-in-MVP actions.
+- `POL-2 No Autonomous Remote Ops`: MACS must not autonomously invoke remote execution, deployment, issue-tracker mutation, SaaS write APIs, or similar network side effects without explicit governed-surface policy and operator-confirmed action.
+- `POL-3 Baseline Diff/Review Gate`: before task close/archive or any action that relaxes a safety boundary, the operator workflow must surface a baseline diff/review checkpoint and record the approval event. Phase 1 may satisfy this with repo-native diff evidence and operator attribution; richer semantic review remains post-MVP.
+- `POL-4 Operator Approval Classes`: automatic, policy-automatic, operator-confirmed, guarded, and forbidden actions must remain explicit and inspectable. `task pause`, `task resume`, `task reroute`, `recovery retry`, and `recovery reconcile` are operator-confirmed; `task abort`, `lock override`, and `lock release` are intentionally CLI-visible but guarded in Phase 1.
+- `POL-5 Governed Surface Control`: MCP, tool, and network-facing surfaces are deny-by-default unless allowlisted. Production-oriented profiles require adapter pins, and may require version pins and scoped secret references for approved surfaces.
+- `POL-6 Local-First Sensitive Routing`: `privacy_sensitive_offline` work must route to local/runtime-neutral workers and forbid networked tools unless policy explicitly relaxes that boundary.
+
 For MVP audit, privacy, and retention policy:
 - audit capture should default to controller metadata and state transitions first, not full transcript capture
 - prompt, terminal, and tool-output content should be persisted only when needed for operator-visible recovery or debugging and should support redaction or omission by policy
@@ -575,6 +591,21 @@ Required support:
 
 The product must make runtime capability differences explicit rather than pretending all workers are interchangeable.
 
+### BMAD Execution Policy and Operating Profiles
+
+BMAD execution policy is explicit. Operator-facing BMAD phases map to canonical `workflow_class` values and runtime routing rules:
+
+| BMAD phase | Canonical `workflow_class` | `primary_plus_fallback` | `full_hybrid` | Notes |
+| --- | --- | --- | --- | --- |
+| Context capture / repo familiarization | `documentation_context` | `codex -> claude` | `codex -> claude` | exclude degraded, unavailable, and quarantined workers |
+| Planning artifacts / PRD / story shaping | `planning_docs` | `claude -> codex` | `claude -> codex -> gemini` | optimize for synthesis and critique |
+| Solution design / architecture | `solutioning` | `claude -> codex` | `claude -> codex -> gemini` | hybrid profile allows broader alternative exploration |
+| Implementation / development | `implementation` | `codex -> claude` | `codex -> claude -> local` | interruptibility required |
+| Review / QA / release review | `review` | `codex -> claude` | `codex -> claude -> gemini` | keep review evidence and approval flow explicit |
+| Privacy-sensitive / offline work | `privacy_sensitive_offline` | `local only` | `local only` | networked tools forbidden unless policy is explicitly relaxed |
+
+`primary_plus_fallback` is the shipping-default scope-control profile. `full_hybrid` is an explicit opt-in profile that expands the candidate runtime pool without relaxing the safety baseline, operator approvals, or audit requirements.
+
 ### Installation and Configuration Model
 
 The tool must be installable and configurable in a way that fits open-source developer workflows.
@@ -593,6 +624,7 @@ The configuration model must separate:
 - orchestration policy settings
 - safety/governance settings
 - repo-local state and target metadata
+- operating-profile selection layered across controller defaults, routing policy, and governance policy
 
 ### Control Surface and Product Interface
 
@@ -605,13 +637,15 @@ The product must expose operator-visible controls for:
 - task creation/assignment
 - current ownership and lock inspection
 - pause/resume
-- abort
 - reroute
 - reconciliation/recovery
+- close/archive completed work
+- baseline diff/review checkpoint visibility for closeout and safety-relaxing actions
+- guarded high-consequence actions such as `abort`, `lock override`, and `lock release`
 - event/audit inspection
 - token/session-limit visibility where available
 
-This surface must be sufficient for normal orchestration workflows without requiring direct raw tmux manipulation as the primary control path.
+This surface must be sufficient for normal orchestration workflows without requiring direct raw tmux manipulation as the primary control path. In Phase 1, `abort`, `lock override`, and `lock release` are intentionally CLI-visible but guarded rather than silently executing under default policy.
 
 ### Extension Surface and Adapter Model
 
@@ -764,10 +798,13 @@ The timing targets in NFR1-NFR3 assume a reference environment roughly equivalen
 - NFR9: Governed integration surfaces, including MCP-backed tool access where used, must support allowlisting or equivalent explicit trust controls before being enabled in a production-oriented configuration.
 - NFR10: Where runtimes expose approval, sandbox, or permission controls, MACS must preserve and surface those controls rather than bypassing them.
 
+The shipping governance baseline is a repo-local policy surface grounded in `governance-policy.json`, with explicit allowlists, adapter pins, workflow overrides, and audit-content policy. Production-oriented profiles extend that baseline with runtime or model version pins and scoped secret references, but those controls must remain controller-owned and inspectable rather than hidden in adapter code.
+
 For the MVP decision-rights model:
 - always automatic: evidence collection, health classification, eligibility filtering, lease expiry evaluation, and warning generation
-- policy-automatic but operator-visible: normal task routing, coarse lock acquisition, worker draining from new work, and non-destructive quarantine or throttling actions
-- operator-confirmed: reroute after degraded work, conflict override, abort of active work, destructive recovery actions, and any action that would relax safety policy or cause meaningful side effects beyond the current bounded policy
+- policy-automatic but operator-visible: normal task assignment, coarse lock acquisition, worker disable or quarantine drain behavior, and non-destructive throttling actions
+- operator-confirmed and implemented: `task pause`, `task resume`, `task reroute`, `recovery retry`, and `recovery reconcile`
+- operator-confirmed but guarded in Phase 1: `task abort`, `lock override`, and `lock release`
 - forbidden in MVP: automatic pushes, autonomous remote operations outside approved policy, and silent conflict override that bypasses controller auditability
 
 ### Observability & Auditability
@@ -776,6 +813,8 @@ For the MVP decision-rights model:
 - NFR12: Event, lease, and lock history must remain inspectable after task completion or failure so maintainers can perform post-run analysis without depending on raw tmux pane history.
 - NFR13: Routing decisions must retain enough evidence context that maintainers can understand why a worker was selected, rejected, degraded, or quarantined.
 - NFR13a: MVP audit storage must default to local-host retention, capture event metadata by default, and bound or redact rich content capture according to documented local policy.
+
+The minimum event schema for Phase 1 is explicit: `event_id`, `event_type`, `aggregate_type`, `aggregate_id`, `timestamp`, `actor_type`, `actor_id`, `correlation_id`, `causation_id`, `payload`, and `redaction_level`. `payload` must support `affected_refs`, decision metadata, routing or governance references, and governed `audit_content` markers so passing runs are auditable without depending on raw tmux history.
 
 ### Usability & Adoption
 

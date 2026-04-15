@@ -18,9 +18,12 @@ from tools.orchestration.config import (
     resolved_compatibility_paths,
 )
 from tools.orchestration.policy import (
+    active_governance_snapshot,
     governance_policy_path,
     load_governance_policy,
     load_routing_policy,
+    resolve_secret_scopes,
+    resolve_surface_version_pins,
     routing_policy_path,
 )
 from tools.orchestration.workers import list_workers
@@ -36,6 +39,11 @@ RUNTIME_BINARY_COMMANDS = {
     "claude": "claude",
     "gemini": "gemini",
     "local": None,
+}
+
+GUIDE_ORIENTATION = {
+    "summary": "Controller-owned setup guidance over current repo-local state.",
+    "authority_note": "Runtime availability on PATH is a hint; controller facts determine readiness.",
 }
 
 
@@ -64,6 +72,7 @@ def build_setup_configuration_snapshot(repo_root: Path, paths) -> dict[str, obje
     adapter_settings = load_adapter_settings(paths.adapter_settings_path)
     routing_policy = load_routing_policy(routing_policy_path(paths.orchestration_dir))
     governance_policy = load_governance_policy(governance_policy_path(paths.orchestration_dir))
+    governance_snapshot = active_governance_snapshot(paths.state_db, live_policy=governance_policy)
     state_layout = load_state_layout(paths.state_layout_path)
     compatibility_paths = resolved_compatibility_paths(repo_root, state_layout)
     return {
@@ -84,6 +93,12 @@ def build_setup_configuration_snapshot(repo_root: Path, paths) -> dict[str, obje
             "governance_policy": {
                 "path": str(governance_policy_path(paths.orchestration_dir)),
                 "values": governance_policy,
+                "summary": {
+                    "operating_profile": governance_policy.get("operating_profile"),
+                    "active_snapshot": governance_snapshot,
+                    "secret_scopes": resolve_secret_scopes(governance_policy),
+                    "surface_version_pins": resolve_surface_version_pins(governance_policy),
+                },
             },
             "state_layout": {
                 "path": str(paths.state_layout_path),
@@ -429,6 +444,155 @@ def build_setup_validation(repo_root: Path, paths) -> dict[str, object]:
         "validation": validation,
         "checks": checks,
     }
+
+
+def build_setup_guide(repo_root: Path, paths) -> dict[str, object]:
+    dry_run = build_setup_dry_run(repo_root, paths)
+    bootstrap_detected = bool(dry_run["bootstrap_detected"])
+    validation = build_setup_validation(repo_root, paths)["validation"] if bootstrap_detected else None
+    phase = _guide_phase(bootstrap_detected, validation)
+    next_action, follow_up_commands = _guide_commands_for_guide_state(phase, dry_run, validation)
+    current_state = {
+        "bootstrap_detected": bootstrap_detected,
+        "outcome": validation["outcome"] if validation else None,
+        "safe_ready_state": bool(validation["safe_ready_state_reached"]) if validation else False,
+        "enabled_adapters": validation["adapter_summary"]["enabled_adapters"] if validation else [],
+        "registered_workers": validation["worker_summary"]["registered"] if validation else 0,
+        "ready_workers": validation["worker_summary"]["ready"] if validation else 0,
+    }
+    return {
+        "command": "macs setup guide",
+        "read_only": True,
+        "repo_root": str(repo_root),
+        "orchestration_dir": str(paths.orchestration_dir),
+        "bootstrap_detected": bootstrap_detected,
+        "current_phase": phase,
+        "orientation": dict(GUIDE_ORIENTATION),
+        "current_state": current_state,
+        "next_action": next_action,
+        "follow_up_commands": follow_up_commands,
+    }
+
+
+def _guide_commands_for_guide_state(
+    phase: str,
+    dry_run: dict[str, object],
+    validation: dict[str, object] | None,
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    if validation is not None:
+        worker_summary = validation["worker_summary"]
+        if validation["safe_ready_state_reached"]:
+            return (
+                _guide_command(dry_run, "macs setup validate --json"),
+                [
+                    _guide_command(dry_run, "macs setup check --json"),
+                ],
+            )
+        if worker_summary["registered"] == 0:
+            return (
+                _guide_command(dry_run, "macs worker discover --json"),
+                [
+                    _guide_command(dry_run, "macs setup check --json"),
+                    _guide_command(dry_run, "macs setup validate --json"),
+                ],
+            )
+        if worker_summary["ready"] == 0:
+            return (
+                _guide_command(
+                    dry_run,
+                    "macs worker discover --json",
+                    purpose_override=(
+                        "refresh controller worker evidence and discover any additional workers before rerunning readiness validation"
+                    ),
+                ),
+                [
+                    _guide_command(dry_run, "macs setup validate --json"),
+                ],
+            )
+    return _guide_commands_for_phase(phase, dry_run)
+
+
+def _guide_phase(bootstrap_detected: bool, validation: dict[str, object] | None) -> str:
+    if not bootstrap_detected:
+        return "bootstrap-required"
+    if validation is None:
+        return "inspect-configuration"
+    if validation["safe_ready_state_reached"]:
+        return "ready"
+    if validation["worker_summary"]["registered"] == 0:
+        return "register-workers"
+    if validation["worker_summary"]["ready"] == 0:
+        return "validate-readiness"
+    return "inspect-configuration"
+
+
+def _guide_commands_for_phase(
+    phase: str,
+    dry_run: dict[str, object],
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    if phase == "bootstrap-required":
+        return (
+            _guide_command(dry_run, "macs setup init"),
+            [
+                _guide_command(
+                    dry_run,
+                    "macs setup dry-run --json",
+                    purpose_override="inspect the conservative onboarding path without mutating controller state",
+                )
+            ],
+        )
+    if phase == "register-workers":
+        return (
+            _guide_command(dry_run, "macs worker discover --json"),
+            [
+                _guide_command(dry_run, "macs setup check --json"),
+                _guide_command(dry_run, "macs setup validate --json"),
+            ],
+        )
+    if phase == "validate-readiness":
+        return (
+            _guide_command(dry_run, "macs setup validate --json"),
+            [
+                _guide_command(dry_run, "macs worker discover --json"),
+            ],
+        )
+    if phase == "ready":
+        return (
+            _guide_command(dry_run, "macs setup validate --json"),
+            [
+                _guide_command(dry_run, "macs setup check --json"),
+            ],
+        )
+    return (
+        _guide_command(dry_run, "macs setup check --json"),
+        [
+            _guide_command(dry_run, "macs setup validate --json"),
+        ],
+    )
+
+
+def _guide_command(
+    dry_run: dict[str, object],
+    command: str,
+    *,
+    purpose_override: str | None = None,
+) -> dict[str, object]:
+    step = _dry_run_step(dry_run, command)
+    read_only = bool(step["read_only"]) if step else command.startswith("macs setup ")
+    purpose = purpose_override or (str(step["purpose"]) if step else "follow the controller-owned onboarding path")
+    return {
+        "command": command,
+        "purpose": purpose,
+        "read_only": read_only,
+        "action_type": "READ-ONLY" if read_only else "ACTION",
+    }
+
+
+def _dry_run_step(dry_run: dict[str, object], command: str) -> dict[str, object] | None:
+    for step in dry_run.get("steps", []):
+        if step.get("command") == command:
+            return step
+    return None
 
 
 def _worker_state_counts(workers: list[dict[str, object]]) -> dict[str, int]:

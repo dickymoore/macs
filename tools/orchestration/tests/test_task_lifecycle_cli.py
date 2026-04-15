@@ -14,6 +14,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from tools.orchestration.checkpoints import current_repo_fingerprint
 from tools.orchestration.invariants import LeaseRecord, TaskRecord, create_task, issue_lease, transition_task_state
 from tools.orchestration.store import EventRecord
 
@@ -62,6 +63,105 @@ class TaskLifecycleCliContractTests(unittest.TestCase):
     def init_repo(self) -> None:
         result = self.run_cli("setup", "init")
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def run_git(self, *args: str) -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(
+                ["git", *args],
+                cwd=self.repo_root,
+                env=self.env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError:
+            self.skipTest("git not available")
+
+    def init_git_repo(self) -> None:
+        init_result = self.run_git("init")
+        self.assertEqual(init_result.returncode, 0, init_result.stdout + init_result.stderr)
+        self.assertEqual(self.run_git("config", "user.email", "checkpoint@example.test").returncode, 0)
+        self.assertEqual(self.run_git("config", "user.name", "Checkpoint Test").returncode, 0)
+        (self.repo_root / ".gitignore").write_text(".codex/\n", encoding="utf-8")
+        (self.repo_root / "README.md").write_text("baseline\n", encoding="utf-8")
+        add_result = self.run_git("add", ".gitignore", "README.md")
+        self.assertEqual(add_result.returncode, 0, add_result.stdout + add_result.stderr)
+        commit_result = self.run_git("commit", "-m", "Initial commit")
+        self.assertEqual(commit_result.returncode, 0, commit_result.stdout + commit_result.stderr)
+
+    def create_checkpointable_repo_changes(self) -> None:
+        readme_path = self.repo_root / "README.md"
+        readme_path.write_text(readme_path.read_text(encoding="utf-8") + "checkpoint change\n", encoding="utf-8")
+        docs_dir = self.repo_root / "docs"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        (docs_dir / "checkpoint-notes.md").write_text("checkpoint notes\n", encoding="utf-8")
+
+    def create_untracked_only_repo_changes(self) -> None:
+        docs_dir = self.repo_root / "docs"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        (docs_dir / "untracked-only-checkpoint.md").write_text(
+            "untracked only checkpoint evidence\n",
+            encoding="utf-8",
+        )
+
+    def capture_task_checkpoint(
+        self,
+        task_id: str,
+        target_action: str,
+        *,
+        operator_id: str = "operator.checkpoint@example.test",
+    ) -> dict[str, object]:
+        result = self.run_cli(
+            "task",
+            "checkpoint",
+            "--task",
+            task_id,
+            "--target-action",
+            target_action,
+            "--json",
+            env_overrides={"MACS_OPERATOR_ID": operator_id},
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return json.loads(result.stdout)
+
+    def insert_review_checkpoint(
+        self,
+        *,
+        checkpoint_id: str,
+        task_id: str,
+        target_action: str,
+        captured_at: str,
+        affected_refs: dict[str, object],
+        baseline_fingerprint: dict[str, object],
+        actor_id: str = "operator.checkpoint@example.test",
+    ) -> None:
+        state_db = self.repo_root / ".codex" / "orchestration" / "state.db"
+        conn = sqlite3.connect(state_db)
+        try:
+            conn.execute(
+                """
+                INSERT INTO review_checkpoints (
+                    checkpoint_id, task_id, target_action, actor_type, actor_id, captured_at,
+                    event_id, decision_event_id, affected_refs, evidence_refs, baseline_fingerprint
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    checkpoint_id,
+                    task_id,
+                    target_action,
+                    "operator",
+                    actor_id,
+                    captured_at,
+                    f"evt-review-checkpoint-seed-{checkpoint_id.split('-')[-1]}",
+                    None,
+                    json.dumps(affected_refs, sort_keys=True),
+                    json.dumps({"bundle_dir": f".codex/orchestration/checkpoints/{checkpoint_id}"}, sort_keys=True),
+                    json.dumps(baseline_fingerprint, sort_keys=True),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
     def seed_worker(self, worker_id: str = "worker-codex-contract") -> str:
         return self.seed_worker_with_tmux(
@@ -123,6 +223,7 @@ class TaskLifecycleCliContractTests(unittest.TestCase):
         tmux_socket: str | None = None,
         tmux_session: str | None = None,
         tmux_pane: str = "%1",
+        freshness_seconds: int = 0,
     ) -> str:
         state_db = self.repo_root / ".codex" / "orchestration" / "state.db"
         conn = sqlite3.connect(state_db)
@@ -145,8 +246,8 @@ class TaskLifecycleCliContractTests(unittest.TestCase):
                     state,
                     json.dumps(capabilities),
                     "required_only",
-                    self.iso_now(),
-                    self.iso_now(),
+                    self.iso_now(seconds_ago=freshness_seconds),
+                    self.iso_now(seconds_ago=freshness_seconds),
                     "interruptible",
                     json.dumps(operator_tags or ["registered"]),
                 ),
@@ -169,6 +270,39 @@ class TaskLifecycleCliContractTests(unittest.TestCase):
         updated = mutator(settings)
         settings_path.write_text(json.dumps(updated, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return updated
+
+    def configure_secret_scopes(
+        self,
+        scopes: list[dict[str, object]],
+        *,
+        allowlisted_surfaces: list[str] | None = None,
+    ) -> dict[str, object]:
+        surfaces = allowlisted_surfaces or sorted(
+            {
+                str(scope["surface_id"])
+                for scope in scopes
+                if isinstance(scope, dict) and scope.get("surface_id")
+            }
+        )
+        return self.update_governance_policy(
+            lambda policy: {
+                **policy,
+                "governed_surfaces": {
+                    **policy["governed_surfaces"],
+                    "allowlisted_surfaces": sorted(
+                        set(policy["governed_surfaces"].get("allowlisted_surfaces", [])) | set(surfaces)
+                    ),
+                },
+                "secret_scopes": scopes,
+            }
+        )
+
+    def write_worker_env(self, values: dict[str, str]) -> Path:
+        env_path = self.repo_root / ".codex" / "tmux-worker.env"
+        env_path.parent.mkdir(parents=True, exist_ok=True)
+        lines = [f"{key}={json.dumps(value)}" for key, value in sorted(values.items())]
+        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return env_path
 
     def seed_task(
         self,
@@ -248,6 +382,47 @@ class TaskLifecycleCliContractTests(unittest.TestCase):
             text=True,
         )
         return str(socket), session, pane_id
+
+    def configure_surface_version_pin(
+        self,
+        *,
+        surface_id: str = "mcp",
+        adapter_id: str,
+        workflow_class: str = "implementation",
+        expected_runtime_identity: str | None = None,
+        expected_model_identity: str | None = None,
+    ) -> dict[str, object]:
+        pin = {
+            "surface_id": surface_id,
+            "adapter_id": adapter_id,
+            "workflow_class": workflow_class,
+            "operating_profile": "primary_plus_fallback",
+        }
+        if expected_runtime_identity is not None:
+            pin["expected_runtime_identity"] = expected_runtime_identity
+        if expected_model_identity is not None:
+            pin["expected_model_identity"] = expected_model_identity
+        return self.update_governance_policy(
+            lambda policy: {
+                **policy,
+                "governed_surfaces": {
+                    **policy["governed_surfaces"],
+                    "allowlisted_surfaces": sorted(
+                        set(policy["governed_surfaces"].get("allowlisted_surfaces", [])) | {surface_id}
+                    ),
+                },
+                "surface_version_pins": [pin],
+            }
+        )
+
+    def stage_tmux_capture(self, tmux_socket: str, tmux_pane: str, content: str) -> None:
+        if content:
+            subprocess.run(
+                ["tmux", "-S", tmux_socket, "send-keys", "-t", tmux_pane, "-l", content],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
 
     def capture_tmux_pane(self, tmux_socket: str, tmux_pane: str) -> str:
         return subprocess.run(
@@ -359,6 +534,35 @@ class TaskLifecycleCliContractTests(unittest.TestCase):
             conn.close()
 
         return task_id, lease_id
+
+    def seed_same_second_checkpoints(
+        self,
+        *,
+        task_id: str,
+        target_action: str,
+        affected_refs: dict[str, object],
+    ) -> tuple[str, str]:
+        captured_at = self.iso_now()
+        baseline_fingerprint = current_repo_fingerprint(self.repo_root)
+        older_checkpoint_id = "checkpoint-zzzzzzzzzzzz"
+        newer_checkpoint_id = "checkpoint-aaaaaaaaaaaa"
+        self.insert_review_checkpoint(
+            checkpoint_id=older_checkpoint_id,
+            task_id=task_id,
+            target_action=target_action,
+            captured_at=captured_at,
+            affected_refs=affected_refs,
+            baseline_fingerprint=baseline_fingerprint,
+        )
+        self.insert_review_checkpoint(
+            checkpoint_id=newer_checkpoint_id,
+            task_id=task_id,
+            target_action=target_action,
+            captured_at=captured_at,
+            affected_refs=affected_refs,
+            baseline_fingerprint=baseline_fingerprint,
+        )
+        return older_checkpoint_id, newer_checkpoint_id
 
     def seed_interrupted_recovery_task(
         self,
@@ -967,6 +1171,383 @@ class TaskLifecycleCliContractTests(unittest.TestCase):
             "governed_surface_not_allowlisted:mcp",
             inspect_payload["task"]["routing_decision"]["rationale"]["rejected_workers"][0]["reasons"],
         )
+
+    def test_task_assign_rejects_surface_version_pin_mismatch_and_preserves_routing_context(self) -> None:
+        self.init_repo()
+        self.configure_surface_version_pin(
+            adapter_id="codex",
+            expected_runtime_identity="codex",
+            expected_model_identity="gpt-5.4",
+        )
+        tmux_socket, tmux_session, tmux_pane = self.start_tmux_worker()
+        self.stage_tmux_capture(
+            tmux_socket,
+            tmux_pane,
+            "codex --model gpt-5.4-mini --sandbox workspace-write --yolo",
+        )
+        self.seed_worker_row(
+            worker_id="worker-codex-version-mismatch",
+            runtime_type="codex",
+            adapter_id="codex",
+            capabilities=["implementation"],
+            operator_tags=["registered", "surface:mcp"],
+            tmux_socket=tmux_socket,
+            tmux_session=tmux_session,
+            tmux_pane=tmux_pane,
+        )
+        task_id = self.seed_task(task_id="task-contract-version-mismatch", summary="Version mismatch")
+
+        result = self.run_cli("task", "assign", "--task", task_id, "--json")
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["errors"][0]["code"], "policy_blocked")
+        self.assertIn("surface version pin enforcement rejected the available workers", payload["data"]["result"]["blocking_condition"])
+        self.assertIn("mismatch", payload["data"]["result"]["blocking_condition"])
+        rejected = payload["data"]["result"]["routing_evaluation"]["rejected_workers"][0]
+        self.assertIn("surface_version_pin_mismatch:mcp", rejected["reasons"])
+        blocked = rejected["governance"]["surface_version_pins"]["blocked_surfaces"][0]
+        self.assertEqual(blocked["reason"], "surface_version_pin_mismatch")
+        self.assertEqual(blocked["observed"]["model_identity"]["identity"], "gpt-5.4-mini")
+
+        inspect_payload = json.loads(self.run_cli("task", "inspect", "--task", task_id, "--json").stdout)
+        self.assertIn("mismatch", inspect_payload["task"]["blocking_condition"])
+        self.assertIn(
+            "surface_version_pin_mismatch:mcp",
+            inspect_payload["task"]["routing_decision"]["rationale"]["rejected_workers"][0]["reasons"],
+        )
+
+    def test_task_assign_rejects_missing_surface_version_evidence_and_preserves_routing_context(self) -> None:
+        self.init_repo()
+        self.configure_surface_version_pin(
+            adapter_id="claude",
+            expected_runtime_identity="claude",
+            expected_model_identity="claude-3-7-sonnet",
+        )
+        task_id = self.seed_task(task_id="task-contract-version-missing", summary="Version missing")
+        self.seed_worker_row(
+            worker_id="worker-claude-version-missing",
+            runtime_type="claude",
+            adapter_id="claude",
+            capabilities=["implementation"],
+            operator_tags=["registered", "surface:mcp"],
+        )
+
+        result = self.run_cli("task", "assign", "--task", task_id, "--json")
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["errors"][0]["code"], "policy_blocked")
+        self.assertIn("missing evidence", payload["data"]["result"]["blocking_condition"])
+        rejected = payload["data"]["result"]["routing_evaluation"]["rejected_workers"][0]
+        self.assertIn("surface_version_evidence_missing:mcp", rejected["reasons"])
+        blocked = rejected["governance"]["surface_version_pins"]["blocked_surfaces"][0]
+        self.assertEqual(blocked["reason"], "surface_version_evidence_missing")
+        self.assertIsNone(blocked["observed"]["model_identity"])
+
+    def test_task_assign_rejects_stale_surface_version_evidence_and_preserves_routing_context(self) -> None:
+        self.init_repo()
+        self.configure_surface_version_pin(
+            adapter_id="claude",
+            expected_runtime_identity="claude",
+        )
+        self.seed_worker_row(
+            worker_id="worker-claude-version-stale",
+            runtime_type="claude",
+            adapter_id="claude",
+            capabilities=["implementation"],
+            operator_tags=["registered", "surface:mcp"],
+            freshness_seconds=120,
+        )
+        task_id = self.seed_task(task_id="task-contract-version-stale", summary="Version stale")
+
+        result = self.run_cli("task", "assign", "--task", task_id, "--json")
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["errors"][0]["code"], "policy_blocked")
+        self.assertIn("stale evidence", payload["data"]["result"]["blocking_condition"])
+        rejected = payload["data"]["result"]["routing_evaluation"]["rejected_workers"][0]
+        self.assertIn("surface_version_evidence_stale:mcp", rejected["reasons"])
+        blocked = rejected["governance"]["surface_version_pins"]["blocked_surfaces"][0]
+        self.assertEqual(blocked["reason"], "surface_version_evidence_stale")
+        self.assertGreaterEqual(blocked["observed"]["runtime_identity"]["freshness_seconds"], 120)
+
+    def test_task_assign_rejects_low_trust_surface_version_evidence_and_preserves_routing_context(self) -> None:
+        self.init_repo()
+        self.configure_surface_version_pin(
+            adapter_id="codex",
+            expected_runtime_identity="codex",
+            expected_model_identity="gpt-5.4",
+        )
+        tmux_socket, tmux_session, tmux_pane = self.start_tmux_worker()
+        self.stage_tmux_capture(tmux_socket, tmux_pane, "idle shell prompt")
+        self.seed_worker_row(
+            worker_id="worker-codex-version-untrusted",
+            runtime_type="codex",
+            adapter_id="codex",
+            capabilities=["implementation"],
+            operator_tags=["registered", "surface:mcp"],
+            tmux_socket=tmux_socket,
+            tmux_session=tmux_session,
+            tmux_pane=tmux_pane,
+        )
+        task_id = self.seed_task(task_id="task-contract-version-untrusted", summary="Version untrusted")
+
+        result = self.run_cli("task", "assign", "--task", task_id, "--json")
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["errors"][0]["code"], "policy_blocked")
+        self.assertIn("low-trust evidence", payload["data"]["result"]["blocking_condition"])
+        rejected = payload["data"]["result"]["routing_evaluation"]["rejected_workers"][0]
+        self.assertIn("surface_version_evidence_untrusted:mcp", rejected["reasons"])
+        blocked = rejected["governance"]["surface_version_pins"]["blocked_surfaces"][0]
+        self.assertEqual(blocked["reason"], "surface_version_evidence_untrusted")
+        self.assertEqual(blocked["observed"]["model_identity"]["confidence"], "low")
+
+    def test_task_assign_rejects_out_of_scope_secret_selector_before_assignment_state(self) -> None:
+        self.init_repo()
+        self.configure_secret_scopes(
+            [
+                {
+                    "surface_id": "mcp",
+                    "adapter_id": "claude",
+                    "workflow_class": "review",
+                    "operating_profile": "primary_plus_fallback",
+                    "secret_ref": "mcp.claude.token",
+                    "display_name": "Claude MCP token",
+                    "redaction_label": "masked",
+                }
+            ]
+        )
+        self.seed_worker_row(
+            worker_id="worker-codex-secret-no-scope",
+            runtime_type="codex",
+            adapter_id="codex",
+            capabilities=["implementation"],
+            operator_tags=["registered", "surface:mcp"],
+        )
+        task_id = self.seed_task(task_id="task-contract-secret-no-scope", summary="Secret no-scope block")
+
+        result = self.run_cli(
+            "task",
+            "assign",
+            "--task",
+            task_id,
+            "--worker",
+            "worker-codex-secret-no-scope",
+            "--json",
+        )
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["errors"][0]["code"], "policy_blocked")
+        secret_resolution = payload["data"]["result"]["secret_resolution"]
+        self.assertEqual(secret_resolution["status"], "blocked")
+        self.assertEqual(secret_resolution["reason"], "secret_scope_selector_mismatch")
+        self.assertEqual(secret_resolution["surface_summaries"][0]["reason"], "secret_scope_selector_mismatch")
+        self.assertEqual(payload["data"]["result"]["affected_refs"]["surface_id"], "mcp")
+        self.assertIn("did not match the selected adapter", payload["data"]["result"]["blocking_condition"])
+
+        inspect_payload = json.loads(self.run_cli("task", "inspect", "--task", task_id, "--json").stdout)
+        self.assertEqual(inspect_payload["task"]["state"], "pending_assignment")
+        self.assertIsNone(inspect_payload["task"]["current_worker_id"])
+        self.assertIsNone(inspect_payload["task"]["current_lease_id"])
+        self.assertEqual(inspect_payload["task"]["secret_resolution"]["reason"], "secret_scope_selector_mismatch")
+
+        lease_history_payload = json.loads(self.run_cli("lease", "history", "--task", task_id, "--json").stdout)
+        self.assertEqual(lease_history_payload["data"]["leases"], [])
+
+        event_list_payload = json.loads(self.run_cli("event", "list", "--json").stdout)
+        event_types = [item["event_type"] for item in event_list_payload["data"]["events"]]
+        self.assertIn("routing.decision_recorded", event_types)
+        self.assertNotIn("task.assigned", event_types)
+
+    def test_task_assign_rejects_unresolved_secret_ref_before_assignment_and_lease_reservation(self) -> None:
+        self.init_repo()
+        self.configure_secret_scopes(
+            [
+                {
+                    "surface_id": "mcp",
+                    "adapter_id": "codex",
+                    "workflow_class": "implementation",
+                    "operating_profile": "primary_plus_fallback",
+                    "secret_ref": "mcp.codex.token",
+                    "display_name": "Codex MCP token",
+                    "redaction_label": "masked",
+                }
+            ]
+        )
+        self.seed_worker_row(
+            worker_id="worker-codex-secret-unresolved",
+            runtime_type="codex",
+            adapter_id="codex",
+            capabilities=["implementation"],
+            operator_tags=["registered", "surface:mcp"],
+        )
+        task_id = self.seed_task(task_id="task-contract-secret-unresolved", summary="Secret unresolved block")
+
+        result = self.run_cli(
+            "task",
+            "assign",
+            "--task",
+            task_id,
+            "--worker",
+            "worker-codex-secret-unresolved",
+            "--json",
+        )
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["errors"][0]["code"], "policy_blocked")
+        secret_resolution = payload["data"]["result"]["secret_resolution"]
+        self.assertEqual(secret_resolution["status"], "blocked")
+        self.assertEqual(secret_resolution["reason"], "secret_ref_unresolved")
+        self.assertEqual(secret_resolution["surface_summaries"][0]["unresolved_secret_refs"], ["mcp.codex.token"])
+        self.assertEqual(payload["data"]["result"]["affected_refs"]["secret_ref"], "mcp.codex.token")
+        self.assertIn("could not be resolved", payload["data"]["result"]["blocking_condition"])
+
+        inspect_payload = json.loads(self.run_cli("task", "inspect", "--task", task_id, "--json").stdout)
+        self.assertEqual(inspect_payload["task"]["state"], "pending_assignment")
+        self.assertIsNone(inspect_payload["task"]["current_worker_id"])
+        self.assertIsNone(inspect_payload["task"]["current_lease_id"])
+        self.assertEqual(inspect_payload["task"]["secret_resolution"]["reason"], "secret_ref_unresolved")
+
+        event_list_payload = json.loads(self.run_cli("event", "list", "--json").stdout)
+        event_types = [item["event_type"] for item in event_list_payload["data"]["events"]]
+        self.assertIn("routing.decision_recorded", event_types)
+        self.assertNotIn("task.assigned", event_types)
+
+    def test_task_assign_resolves_secret_only_for_selected_worker_and_keeps_raw_values_out_of_audit(self) -> None:
+        if shutil.which("tmux") is None:
+            self.skipTest("tmux not available")
+
+        self.init_repo()
+        runtime_secret = os.urandom(8).hex()
+        self.write_worker_env({"MCP_CODEX_TOKEN": runtime_secret})
+        self.configure_secret_scopes(
+            [
+                {
+                    "surface_id": "mcp",
+                    "adapter_id": "codex",
+                    "workflow_class": "implementation",
+                    "operating_profile": "primary_plus_fallback",
+                    "secret_ref": "mcp.codex.token",
+                    "display_name": "Codex MCP token",
+                    "redaction_label": "masked",
+                },
+                {
+                    "surface_id": "mcp",
+                    "adapter_id": "claude",
+                    "workflow_class": "implementation",
+                    "operating_profile": "primary_plus_fallback",
+                    "secret_ref": "mcp.claude.token",
+                    "display_name": "Claude MCP token",
+                    "redaction_label": "masked",
+                },
+            ]
+        )
+        tmux_socket, tmux_session, tmux_pane = self.start_tmux_worker()
+        self.seed_worker_row(
+            worker_id="worker-codex-secret-selected",
+            runtime_type="codex",
+            adapter_id="codex",
+            capabilities=["implementation"],
+            operator_tags=["registered", "surface:mcp"],
+            tmux_socket=tmux_socket,
+            tmux_session=tmux_session,
+            tmux_pane=tmux_pane,
+        )
+        self.seed_worker_row(
+            worker_id="worker-claude-secret-unselected",
+            runtime_type="claude",
+            adapter_id="claude",
+            capabilities=["implementation"],
+            operator_tags=["registered", "surface:mcp"],
+        )
+        task_id = self.seed_task(task_id="task-contract-secret-selected", summary="Secret selected-worker resolution")
+
+        result = self.run_cli("task", "assign", "--task", task_id, "--json")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["data"]["result"]["selected_worker_id"], "worker-codex-secret-selected")
+        secret_resolution = payload["data"]["result"]["secret_resolution"]
+        self.assertEqual(secret_resolution["status"], "resolved")
+        self.assertEqual(secret_resolution["required_secret_refs"], ["mcp.codex.token"])
+        self.assertEqual(secret_resolution["resolved_secret_refs"], ["mcp.codex.token"])
+        self.assertNotIn(runtime_secret, json.dumps(secret_resolution, sort_keys=True))
+        self.assertNotIn("mcp.claude.token", json.dumps(secret_resolution, sort_keys=True))
+
+        assignment_event = payload["data"]["event"]
+        self.assertIn("secret_resolution", assignment_event["payload"])
+        self.assertNotIn(runtime_secret, json.dumps(assignment_event["payload"]["secret_resolution"], sort_keys=True))
+        self.assertNotIn("resolved_secrets", json.dumps(assignment_event["payload"], sort_keys=True))
+
+        inspect_payload = json.loads(self.run_cli("task", "inspect", "--task", task_id, "--json").stdout)
+        self.assertEqual(inspect_payload["task"]["secret_resolution"]["resolved_secret_refs"], ["mcp.codex.token"])
+        self.assertNotIn(runtime_secret, inspect_payload["task"]["blocking_condition"] or "")
+
+        event_payload = json.loads(
+            self.run_cli("event", "inspect", "--event", assignment_event["event_id"], "--json").stdout
+        )
+        self.assertEqual(
+            event_payload["data"]["event"]["payload"]["secret_resolution"]["resolved_secret_refs"],
+            ["mcp.codex.token"],
+        )
+        self.assertNotIn(runtime_secret, json.dumps(event_payload["data"]["event"], sort_keys=True))
+
+        pane_output = self.capture_tmux_pane(tmux_socket, tmux_pane)
+        self.assertIn("MACS_TASK_ASSIGN", pane_output)
+        self.assertNotIn(runtime_secret, pane_output)
+        self.assertNotIn("mcp.codex.token", pane_output)
+
+    def test_task_assign_keeps_non_governed_or_non_secret_backed_paths_unchanged(self) -> None:
+        if shutil.which("tmux") is None:
+            self.skipTest("tmux not available")
+
+        self.init_repo()
+        self.configure_secret_scopes(
+            [
+                {
+                    "surface_id": "mcp",
+                    "adapter_id": "codex",
+                    "workflow_class": "implementation",
+                    "operating_profile": "primary_plus_fallback",
+                    "secret_ref": "mcp.codex.token",
+                    "display_name": "Codex MCP token",
+                    "redaction_label": "masked",
+                }
+            ]
+        )
+        tmux_socket, tmux_session, tmux_pane = self.start_tmux_worker()
+        self.seed_worker_row(
+            worker_id="worker-codex-no-governed-surface",
+            runtime_type="codex",
+            adapter_id="codex",
+            capabilities=["implementation"],
+            operator_tags=["registered"],
+            tmux_socket=tmux_socket,
+            tmux_session=tmux_session,
+            tmux_pane=tmux_pane,
+        )
+        task_id = self.seed_task(task_id="task-contract-secret-not-required", summary="Secret not required")
+
+        result = self.run_cli(
+            "task",
+            "assign",
+            "--task",
+            task_id,
+            "--worker",
+            "worker-codex-no-governed-surface",
+            "--json",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["data"]["result"]["task"]["state"], "active")
+        self.assertEqual(payload["data"]["result"]["secret_resolution"]["status"], "not_required")
 
     def test_adapter_inspect_surfaces_repo_local_settings(self) -> None:
         self.init_repo()
@@ -1822,9 +2403,20 @@ class TaskLifecycleCliContractTests(unittest.TestCase):
 
     def test_task_close_completes_active_task_and_releases_live_ownership(self) -> None:
         self.init_repo()
+        self.init_git_repo()
         task_id, lease_id = self.seed_active_task_with_lease_and_lock()
+        self.create_checkpointable_repo_changes()
+        checkpoint_payload = self.capture_task_checkpoint(task_id, "task.close")
+        checkpoint_id = checkpoint_payload["data"]["result"]["checkpoint_id"]
 
-        result = self.run_cli("task", "close", "--task", task_id, "--json")
+        result = self.run_cli(
+            "task",
+            "close",
+            "--task",
+            task_id,
+            "--json",
+            env_overrides={"MACS_OPERATOR_ID": "operator.checkpoint@example.test"},
+        )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
         payload = json.loads(result.stdout)
@@ -1837,7 +2429,13 @@ class TaskLifecycleCliContractTests(unittest.TestCase):
         self.assertEqual(payload["data"]["result"]["lease"]["lease_id"], lease_id)
         self.assertEqual(payload["data"]["result"]["lease"]["state"], "completed")
         self.assertEqual(payload["data"]["result"]["locks"][0]["state"], "released")
+        self.assertEqual(payload["data"]["result"]["checkpoint_id"], checkpoint_id)
+        self.assertTrue(payload["data"]["result"]["controller_state_changed"])
+        self.assertEqual(payload["data"]["result"]["review_gate"]["status"], "satisfied")
+        decision_event_id = payload["data"]["result"]["decision_event_id"]
         self.assertEqual(payload["data"]["event"]["event_type"], "task.completed")
+        self.assertEqual(payload["data"]["event"]["payload"]["checkpoint_id"], checkpoint_id)
+        self.assertEqual(payload["data"]["event"]["payload"]["decision_event_id"], decision_event_id)
         event_id = payload["data"]["event"]["event_id"]
 
         lease_history_payload = json.loads(self.run_cli("lease", "history", "--task", task_id, "--json").stdout)
@@ -1848,9 +2446,23 @@ class TaskLifecycleCliContractTests(unittest.TestCase):
 
         event_payload = json.loads(self.run_cli("event", "inspect", "--event", event_id, "--json").stdout)
         self.assertEqual(event_payload["data"]["event"]["event_type"], "task.completed")
+        self.assertEqual(event_payload["data"]["checkpoint"]["checkpoint_id"], checkpoint_id)
+        self.assertEqual(event_payload["data"]["decision_event"]["event_id"], decision_event_id)
+        self.assertEqual(event_payload["data"]["decision_event"]["actor_id"], "operator.checkpoint@example.test")
 
         overview_payload = json.loads(self.run_cli("overview", "show", "--json").stdout)
         self.assertEqual(overview_payload["data"]["overview"]["task_summary"]["completed"], 1)
+
+        state_db = self.repo_root / ".codex" / "orchestration" / "state.db"
+        conn = sqlite3.connect(state_db)
+        try:
+            row = conn.execute(
+                "SELECT decision_event_id FROM review_checkpoints WHERE checkpoint_id = ?",
+                (checkpoint_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row[0], decision_event_id)
 
     def test_task_close_rejects_non_active_state_with_contract_conflict(self) -> None:
         self.init_repo()
@@ -1865,11 +2477,398 @@ class TaskLifecycleCliContractTests(unittest.TestCase):
         self.assertEqual(payload["errors"][0]["code"], "conflict")
         self.assertIsNone(payload["data"]["event"])
 
+    def test_task_close_blocks_without_checkpoint_and_leaves_state_unchanged(self) -> None:
+        self.init_repo()
+        self.init_git_repo()
+        task_id, lease_id = self.seed_active_task_with_lease_and_lock(
+            task_id="task-close-missing-checkpoint",
+            lease_id="lease-close-missing-checkpoint",
+            worker_id="worker-close-missing-checkpoint",
+        )
+
+        result = self.run_cli("task", "close", "--task", task_id, "--json")
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["errors"][0]["code"], "policy_blocked")
+        self.assertIn("no current task.close checkpoint is recorded", payload["errors"][0]["message"])
+        self.assertFalse(payload["data"]["result"]["controller_state_changed"])
+        self.assertEqual(payload["data"]["result"]["review_gate"]["gate_outcome"], "missing")
+        self.assertEqual(
+            payload["data"]["result"]["next_action"],
+            f"macs task checkpoint --task {task_id} --target-action task.close",
+        )
+
+        inspect_payload = json.loads(self.run_cli("task", "inspect", "--task", task_id, "--json").stdout)
+        self.assertEqual(inspect_payload["task"]["state"], "active")
+        self.assertEqual(inspect_payload["task"]["current_lease_id"], lease_id)
+
+        lease_payload = json.loads(self.run_cli("lease", "inspect", "--lease", lease_id, "--json").stdout)
+        self.assertEqual(lease_payload["data"]["lease"]["state"], "active")
+
+        lock_payload = json.loads(self.run_cli("lock", "list", "--json").stdout)
+        self.assertEqual(lock_payload["data"]["locks"][0]["state"], "active")
+
+        state_db = self.repo_root / ".codex" / "orchestration" / "state.db"
+        conn = sqlite3.connect(state_db)
+        try:
+            checkpoint_count = conn.execute("SELECT COUNT(*) FROM review_checkpoints").fetchone()[0]
+            decision_count = conn.execute(
+                "SELECT COUNT(*) FROM events WHERE event_type = 'intervention.decision_recorded'"
+            ).fetchone()[0]
+            completed_count = conn.execute(
+                "SELECT COUNT(*) FROM events WHERE event_type IN ('lease.completed', 'task.completed')"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(checkpoint_count, 0)
+        self.assertEqual(decision_count, 0)
+        self.assertEqual(completed_count, 0)
+
+    def test_task_close_blocks_with_stale_checkpoint_after_repo_changes(self) -> None:
+        self.init_repo()
+        self.init_git_repo()
+        task_id, lease_id = self.seed_active_task_with_lease_and_lock(
+            task_id="task-close-stale-checkpoint",
+            lease_id="lease-close-stale-checkpoint",
+            worker_id="worker-close-stale-checkpoint",
+        )
+        self.create_checkpointable_repo_changes()
+        checkpoint_payload = self.capture_task_checkpoint(task_id, "task.close")
+        checkpoint_id = checkpoint_payload["data"]["result"]["checkpoint_id"]
+        self.create_checkpointable_repo_changes()
+
+        result = self.run_cli("task", "close", "--task", task_id, "--json")
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["errors"][0]["code"], "policy_blocked")
+        self.assertEqual(payload["data"]["result"]["review_gate"]["gate_outcome"], "stale")
+        self.assertEqual(payload["data"]["result"]["review_gate"]["reason"], "repo_state_mismatch")
+        self.assertEqual(payload["data"]["result"]["review_gate"]["checkpoint"]["checkpoint_id"], checkpoint_id)
+
+        inspect_payload = json.loads(self.run_cli("task", "inspect", "--task", task_id, "--json").stdout)
+        self.assertEqual(inspect_payload["task"]["state"], "active")
+        self.assertEqual(inspect_payload["task"]["current_lease_id"], lease_id)
+
+        state_db = self.repo_root / ".codex" / "orchestration" / "state.db"
+        conn = sqlite3.connect(state_db)
+        try:
+            checkpoint_row = conn.execute(
+                "SELECT decision_event_id FROM review_checkpoints WHERE checkpoint_id = ?",
+                (checkpoint_id,),
+            ).fetchone()
+            decision_count = conn.execute(
+                "SELECT COUNT(*) FROM events WHERE event_type = 'intervention.decision_recorded'"
+            ).fetchone()[0]
+            completed_count = conn.execute(
+                "SELECT COUNT(*) FROM events WHERE event_type IN ('lease.completed', 'task.completed')"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertIsNone(checkpoint_row[0])
+        self.assertEqual(decision_count, 0)
+        self.assertEqual(completed_count, 0)
+
+    def test_task_close_blocks_when_only_archive_checkpoint_exists(self) -> None:
+        self.init_repo()
+        self.init_git_repo()
+        task_id, lease_id = self.seed_active_task_with_lease_and_lock(
+            task_id="task-close-mismatched-checkpoint",
+            lease_id="lease-close-mismatched-checkpoint",
+            worker_id="worker-close-mismatched-checkpoint",
+        )
+        self.create_checkpointable_repo_changes()
+        checkpoint_payload = self.capture_task_checkpoint(task_id, "task.archive")
+        checkpoint_id = checkpoint_payload["data"]["result"]["checkpoint_id"]
+
+        result = self.run_cli("task", "close", "--task", task_id, "--json")
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["errors"][0]["code"], "policy_blocked")
+        self.assertEqual(payload["data"]["result"]["review_gate"]["gate_outcome"], "mismatched")
+        self.assertEqual(
+            payload["data"]["result"]["review_gate"]["conflicting_checkpoint"]["checkpoint_id"],
+            checkpoint_id,
+        )
+        self.assertEqual(
+            payload["data"]["result"]["review_gate"]["conflicting_checkpoint"]["target_action"],
+            "task.archive",
+        )
+
+        inspect_payload = json.loads(self.run_cli("task", "inspect", "--task", task_id, "--json").stdout)
+        self.assertEqual(inspect_payload["task"]["state"], "active")
+        self.assertEqual(inspect_payload["task"]["current_lease_id"], lease_id)
+
+    def test_task_close_uses_true_latest_checkpoint_when_same_second_records_exist(self) -> None:
+        self.init_repo()
+        self.init_git_repo()
+        task_id, lease_id = self.seed_active_task_with_lease_and_lock(
+            task_id="task-close-same-second-checkpoints",
+            lease_id="lease-close-same-second-checkpoints",
+            worker_id="worker-close-same-second-checkpoints",
+        )
+        self.create_checkpointable_repo_changes()
+        older_checkpoint_id, newer_checkpoint_id = self.seed_same_second_checkpoints(
+            task_id=task_id,
+            target_action="task.close",
+            affected_refs={
+                "task_id": task_id,
+                "lease_id": lease_id,
+                "worker_id": "worker-close-same-second-checkpoints",
+            },
+        )
+
+        result = self.run_cli(
+            "task",
+            "close",
+            "--task",
+            task_id,
+            "--json",
+            env_overrides={"MACS_OPERATOR_ID": "operator.close.same-second@example.test"},
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["data"]["result"]["checkpoint_id"], newer_checkpoint_id)
+        self.assertEqual(payload["data"]["result"]["review_gate"]["checkpoint"]["checkpoint_id"], newer_checkpoint_id)
+        decision_event_id = payload["data"]["result"]["decision_event_id"]
+
+        state_db = self.repo_root / ".codex" / "orchestration" / "state.db"
+        conn = sqlite3.connect(state_db)
+        try:
+            older_row = conn.execute(
+                "SELECT decision_event_id FROM review_checkpoints WHERE checkpoint_id = ?",
+                (older_checkpoint_id,),
+            ).fetchone()
+            newer_row = conn.execute(
+                "SELECT decision_event_id FROM review_checkpoints WHERE checkpoint_id = ?",
+                (newer_checkpoint_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        self.assertIsNone(older_row[0])
+        self.assertEqual(newer_row[0], decision_event_id)
+
+    def test_task_checkpoint_help_is_discoverable_under_task_family(self) -> None:
+        result = self.run_cli("task", "--help")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("checkpoint", result.stdout)
+
+        checkpoint_help = self.run_cli("task", "checkpoint", "--help")
+        self.assertEqual(checkpoint_help.returncode, 0, checkpoint_help.stderr)
+        self.assertIn("--target-action", checkpoint_help.stdout)
+        self.assertIn("task.close", checkpoint_help.stdout)
+
+    def test_task_checkpoint_captures_repo_native_evidence_and_returns_contract_envelope(self) -> None:
+        self.init_repo()
+        self.init_git_repo()
+        task_id, lease_id = self.seed_active_task_with_lease_and_lock(
+            task_id="task-contract-checkpoint",
+            lease_id="lease-contract-checkpoint",
+            worker_id="worker-codex-checkpoint",
+        )
+        self.create_checkpointable_repo_changes()
+
+        result = self.run_cli(
+            "task",
+            "checkpoint",
+            "--task",
+            task_id,
+            "--target-action",
+            "task.close",
+            "--json",
+            env_overrides={"MACS_OPERATOR_ID": "operator.checkpoint@example.test"},
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(set(payload.keys()), {"ok", "command", "timestamp", "warnings", "errors", "data"})
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["command"], "macs task checkpoint")
+        self.assertEqual(payload["errors"], [])
+
+        action = payload["data"]["result"]
+        self.assertEqual(action["task"]["task_id"], task_id)
+        self.assertEqual(action["task"]["state"], "active")
+        self.assertEqual(action["task_id"], task_id)
+        self.assertEqual(action["target_action"], "task.close")
+        self.assertEqual(action["affected_refs"]["task_id"], task_id)
+        self.assertEqual(action["affected_refs"]["lease_id"], lease_id)
+        self.assertEqual(action["affected_refs"]["worker_id"], "worker-codex-checkpoint")
+        self.assertTrue(action["controller_state_changed"])
+        self.assertEqual(action["next_action"], f"macs task inspect --task {task_id}")
+
+        checkpoint_id = action["checkpoint_id"]
+        artifact_refs = action["artifact_refs"]
+        bundle_dir = self.repo_root / artifact_refs["bundle_dir"]
+        self.assertTrue(bundle_dir.is_dir())
+        for key in (
+            "metadata_json",
+            "head_ref",
+            "git_status",
+            "git_untracked",
+            "git_diff",
+            "git_diff_stat",
+            "git_diff_cached",
+            "git_diff_cached_stat",
+        ):
+            self.assertTrue((self.repo_root / artifact_refs[key]).exists(), key)
+
+        event = payload["data"]["event"]
+        self.assertEqual(event["event_type"], "review.checkpoint_recorded")
+        self.assertEqual(event["actor_type"], "operator")
+        self.assertEqual(event["actor_id"], "operator.checkpoint@example.test")
+        self.assertEqual(event["payload"]["checkpoint_id"], checkpoint_id)
+        self.assertEqual(event["payload"]["target_action"], "task.close")
+
+        inspect_event_payload = json.loads(
+            self.run_cli("event", "inspect", "--event", event["event_id"], "--json").stdout
+        )
+        self.assertEqual(inspect_event_payload["data"]["checkpoint"]["checkpoint_id"], checkpoint_id)
+        self.assertEqual(inspect_event_payload["data"]["checkpoint"]["target_action"], "task.close")
+
+        state_db = self.repo_root / ".codex" / "orchestration" / "state.db"
+        conn = sqlite3.connect(state_db)
+        try:
+            row = conn.execute(
+                """
+                SELECT task_id, target_action, actor_id, event_id
+                FROM review_checkpoints
+                WHERE checkpoint_id = ?
+                """,
+                (checkpoint_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(row)
+        self.assertEqual(row[0], task_id)
+        self.assertEqual(row[1], "task.close")
+        self.assertEqual(row[2], "operator.checkpoint@example.test")
+        self.assertEqual(row[3], event["event_id"])
+
+    def test_task_checkpoint_rejects_non_git_repo_without_persisting_authority(self) -> None:
+        self.init_repo()
+        task_id = self.seed_task(task_id="task-contract-checkpoint-fail", summary="Checkpoint fail-closed")
+
+        result = self.run_cli(
+            "task",
+            "checkpoint",
+            "--task",
+            task_id,
+            "--target-action",
+            "task.close",
+            "--json",
+            env_overrides={"MACS_OPERATOR_ID": "operator.checkpoint@example.test"},
+        )
+        self.assertEqual(result.returncode, 5, result.stdout + result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["command"], "macs task checkpoint")
+        self.assertEqual(payload["errors"][0]["code"], "degraded_precondition")
+        self.assertFalse(payload["data"]["result"]["controller_state_changed"])
+
+        state_db = self.repo_root / ".codex" / "orchestration" / "state.db"
+        conn = sqlite3.connect(state_db)
+        try:
+            checkpoint_count = conn.execute("SELECT COUNT(*) FROM review_checkpoints").fetchone()[0]
+            event_count = conn.execute(
+                "SELECT COUNT(*) FROM events WHERE event_type = 'review.checkpoint_recorded'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(checkpoint_count, 0)
+        self.assertEqual(event_count, 0)
+
+    def test_task_checkpoint_rejects_unsupported_or_unknown_target_actions_without_persisting_authority(self) -> None:
+        self.init_repo()
+        self.init_git_repo()
+        task_id = self.seed_task(task_id="task-checkpoint-invalid-target", summary="Checkpoint invalid target")
+        self.create_checkpointable_repo_changes()
+
+        for target_action in ("task.assign", "made.up.action"):
+            with self.subTest(target_action=target_action):
+                result = self.run_cli(
+                    "task",
+                    "checkpoint",
+                    "--task",
+                    task_id,
+                    "--target-action",
+                    target_action,
+                    "--json",
+                    env_overrides={"MACS_OPERATOR_ID": "operator.checkpoint@example.test"},
+                )
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                payload = json.loads(result.stdout)
+                self.assertFalse(payload["ok"])
+                self.assertEqual(payload["errors"][0]["code"], "invalid_argument")
+                self.assertIn("supported values are 'task.close' and 'task.archive'", payload["errors"][0]["message"])
+                self.assertFalse(payload["data"]["result"]["controller_state_changed"])
+
+        state_db = self.repo_root / ".codex" / "orchestration" / "state.db"
+        conn = sqlite3.connect(state_db)
+        try:
+            checkpoint_count = conn.execute("SELECT COUNT(*) FROM review_checkpoints").fetchone()[0]
+            event_count = conn.execute(
+                "SELECT COUNT(*) FROM events WHERE event_type = 'review.checkpoint_recorded'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(checkpoint_count, 0)
+        self.assertEqual(event_count, 0)
+
+    def test_task_checkpoint_captures_reviewable_untracked_file_diff_when_repo_has_only_new_files(self) -> None:
+        self.init_repo()
+        self.init_git_repo()
+        task_id = self.seed_task(task_id="task-untracked-only-checkpoint", summary="Checkpoint untracked-only evidence")
+        self.create_untracked_only_repo_changes()
+
+        result = self.run_cli(
+            "task",
+            "checkpoint",
+            "--task",
+            task_id,
+            "--target-action",
+            "task.close",
+            "--json",
+            env_overrides={"MACS_OPERATOR_ID": "operator.checkpoint@example.test"},
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        payload = json.loads(result.stdout)
+        artifact_refs = payload["data"]["result"]["artifact_refs"]
+        git_diff_path = self.repo_root / artifact_refs["git_diff"]
+        git_diff_stat_path = self.repo_root / artifact_refs["git_diff_stat"]
+        git_diff_summary_path = self.repo_root / artifact_refs["git_diff_summary"]
+
+        git_diff_output = git_diff_path.read_text(encoding="utf-8")
+        self.assertIn("docs/untracked-only-checkpoint.md", git_diff_output)
+        self.assertIn("+untracked only checkpoint evidence", git_diff_output)
+        self.assertIn("docs/untracked-only-checkpoint.md", git_diff_stat_path.read_text(encoding="utf-8"))
+        self.assertIn("create mode", git_diff_summary_path.read_text(encoding="utf-8"))
+
     def test_task_archive_marks_terminal_task_archived(self) -> None:
         self.init_repo()
+        self.init_git_repo()
         task_id = self.seed_completed_task()
+        self.create_checkpointable_repo_changes()
+        checkpoint_payload = self.capture_task_checkpoint(task_id, "task.archive")
+        checkpoint_id = checkpoint_payload["data"]["result"]["checkpoint_id"]
 
-        result = self.run_cli("task", "archive", "--task", task_id, "--json")
+        result = self.run_cli(
+            "task",
+            "archive",
+            "--task",
+            task_id,
+            "--json",
+            env_overrides={"MACS_OPERATOR_ID": "operator.checkpoint@example.test"},
+        )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
         payload = json.loads(result.stdout)
@@ -1877,7 +2876,12 @@ class TaskLifecycleCliContractTests(unittest.TestCase):
         self.assertEqual(payload["command"], "macs task archive")
         self.assertEqual(payload["data"]["result"]["task"]["task_id"], task_id)
         self.assertEqual(payload["data"]["result"]["task"]["state"], "archived")
+        self.assertEqual(payload["data"]["result"]["checkpoint_id"], checkpoint_id)
+        self.assertEqual(payload["data"]["result"]["review_gate"]["status"], "satisfied")
+        decision_event_id = payload["data"]["result"]["decision_event_id"]
         self.assertEqual(payload["data"]["event"]["event_type"], "task.archived")
+        self.assertEqual(payload["data"]["event"]["payload"]["checkpoint_id"], checkpoint_id)
+        self.assertEqual(payload["data"]["event"]["payload"]["decision_event_id"], decision_event_id)
         event_id = payload["data"]["event"]["event_id"]
 
         inspect_task_payload = json.loads(self.run_cli("task", "inspect", "--task", task_id, "--json").stdout)
@@ -1885,12 +2889,134 @@ class TaskLifecycleCliContractTests(unittest.TestCase):
 
         event_payload = json.loads(self.run_cli("event", "inspect", "--event", event_id, "--json").stdout)
         self.assertEqual(event_payload["data"]["event"]["event_type"], "task.archived")
+        self.assertEqual(event_payload["data"]["checkpoint"]["checkpoint_id"], checkpoint_id)
+        self.assertEqual(event_payload["data"]["decision_event"]["event_id"], decision_event_id)
 
         overview_payload = json.loads(self.run_cli("overview", "show", "--json").stdout)
         self.assertEqual(overview_payload["data"]["overview"]["task_summary"]["archived"], 1)
 
+        state_db = self.repo_root / ".codex" / "orchestration" / "state.db"
+        conn = sqlite3.connect(state_db)
+        try:
+            row = conn.execute(
+                "SELECT decision_event_id FROM review_checkpoints WHERE checkpoint_id = ?",
+                (checkpoint_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row[0], decision_event_id)
+
+    def test_task_archive_blocks_without_checkpoint_and_leaves_state_unchanged(self) -> None:
+        self.init_repo()
+        self.init_git_repo()
+        task_id = self.seed_completed_task(task_id="task-archive-missing-checkpoint")
+
+        result = self.run_cli("task", "archive", "--task", task_id, "--json")
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["errors"][0]["code"], "policy_blocked")
+        self.assertIn("no current task.archive checkpoint is recorded", payload["errors"][0]["message"])
+        self.assertFalse(payload["data"]["result"]["controller_state_changed"])
+        self.assertEqual(payload["data"]["result"]["review_gate"]["gate_outcome"], "missing")
+        self.assertEqual(
+            payload["data"]["result"]["next_action"],
+            f"macs task checkpoint --task {task_id} --target-action task.archive",
+        )
+
+        inspect_task_payload = json.loads(self.run_cli("task", "inspect", "--task", task_id, "--json").stdout)
+        self.assertEqual(inspect_task_payload["task"]["state"], "completed")
+
+        state_db = self.repo_root / ".codex" / "orchestration" / "state.db"
+        conn = sqlite3.connect(state_db)
+        try:
+            checkpoint_count = conn.execute("SELECT COUNT(*) FROM review_checkpoints").fetchone()[0]
+            archived_count = conn.execute(
+                "SELECT COUNT(*) FROM events WHERE event_type = 'task.archived'"
+            ).fetchone()[0]
+            decision_count = conn.execute(
+                "SELECT COUNT(*) FROM events WHERE event_type = 'intervention.decision_recorded'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(checkpoint_count, 0)
+        self.assertEqual(archived_count, 0)
+        self.assertEqual(decision_count, 0)
+
+    def test_task_archive_blocks_when_only_close_checkpoint_exists(self) -> None:
+        self.init_repo()
+        self.init_git_repo()
+        task_id = self.seed_completed_task(task_id="task-archive-mismatched-checkpoint")
+        self.create_checkpointable_repo_changes()
+        checkpoint_payload = self.capture_task_checkpoint(task_id, "task.close")
+        checkpoint_id = checkpoint_payload["data"]["result"]["checkpoint_id"]
+
+        result = self.run_cli("task", "archive", "--task", task_id, "--json")
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["errors"][0]["code"], "policy_blocked")
+        self.assertEqual(payload["data"]["result"]["review_gate"]["gate_outcome"], "mismatched")
+        self.assertEqual(
+            payload["data"]["result"]["review_gate"]["conflicting_checkpoint"]["checkpoint_id"],
+            checkpoint_id,
+        )
+        self.assertEqual(
+            payload["data"]["result"]["review_gate"]["conflicting_checkpoint"]["target_action"],
+            "task.close",
+        )
+
+        inspect_task_payload = json.loads(self.run_cli("task", "inspect", "--task", task_id, "--json").stdout)
+        self.assertEqual(inspect_task_payload["task"]["state"], "completed")
+
+    def test_task_archive_uses_true_latest_checkpoint_when_same_second_records_exist(self) -> None:
+        self.init_repo()
+        self.init_git_repo()
+        task_id = self.seed_completed_task(task_id="task-archive-same-second-checkpoints")
+        self.create_checkpointable_repo_changes()
+        older_checkpoint_id, newer_checkpoint_id = self.seed_same_second_checkpoints(
+            task_id=task_id,
+            target_action="task.archive",
+            affected_refs={"task_id": task_id},
+        )
+
+        result = self.run_cli(
+            "task",
+            "archive",
+            "--task",
+            task_id,
+            "--json",
+            env_overrides={"MACS_OPERATOR_ID": "operator.archive.same-second@example.test"},
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["data"]["result"]["checkpoint_id"], newer_checkpoint_id)
+        self.assertEqual(payload["data"]["result"]["review_gate"]["checkpoint"]["checkpoint_id"], newer_checkpoint_id)
+        decision_event_id = payload["data"]["result"]["decision_event_id"]
+
+        state_db = self.repo_root / ".codex" / "orchestration" / "state.db"
+        conn = sqlite3.connect(state_db)
+        try:
+            older_row = conn.execute(
+                "SELECT decision_event_id FROM review_checkpoints WHERE checkpoint_id = ?",
+                (older_checkpoint_id,),
+            ).fetchone()
+            newer_row = conn.execute(
+                "SELECT decision_event_id FROM review_checkpoints WHERE checkpoint_id = ?",
+                (newer_checkpoint_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        self.assertIsNone(older_row[0])
+        self.assertEqual(newer_row[0], decision_event_id)
+
     def test_task_action_human_readable_output_reports_final_state(self) -> None:
         self.init_repo()
+        self.init_git_repo()
 
         create_result = self.run_cli("task", "create", "--summary", "Human output create")
         self.assertEqual(create_result.returncode, 0, create_result.stderr)
@@ -1914,15 +3040,47 @@ class TaskLifecycleCliContractTests(unittest.TestCase):
             lease_id="lease-human-close",
             worker_id="worker-human-close",
         )
+        self.create_checkpointable_repo_changes()
+        self.capture_task_checkpoint(close_task_id, "task.close")
         close_result = self.run_cli("task", "close", "--task", close_task_id)
         self.assertEqual(close_result.returncode, 0, close_result.stderr)
         self.assertIn("State: completed", close_result.stdout)
         self.assertIn("Locks Released: 1", close_result.stdout)
+        self.assertIn("Checkpoint: checkpoint-", close_result.stdout)
+        self.assertIn("Decision Event: evt-intervention-decision-", close_result.stdout)
 
         archive_task_id = self.seed_completed_task(task_id="task-human-archive")
+        self.create_checkpointable_repo_changes()
+        self.capture_task_checkpoint(archive_task_id, "task.archive")
         archive_result = self.run_cli("task", "archive", "--task", archive_task_id)
         self.assertEqual(archive_result.returncode, 0, archive_result.stderr)
         self.assertIn("State: archived", archive_result.stdout)
+        self.assertIn("Checkpoint: checkpoint-", archive_result.stdout)
+        self.assertIn("Decision Event: evt-intervention-decision-", archive_result.stdout)
+
+    def test_task_checkpoint_human_readable_reports_checkpoint_metadata_and_next_action(self) -> None:
+        self.init_repo()
+        self.init_git_repo()
+        task_id = self.seed_task(task_id="task-human-checkpoint", summary="Human checkpoint slice")
+        self.create_checkpointable_repo_changes()
+
+        result = self.run_cli(
+            "task",
+            "checkpoint",
+            "--task",
+            task_id,
+            "--target-action",
+            "archive",
+            env_overrides={"MACS_OPERATOR_ID": "operator.checkpoint@example.test"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"Task: {task_id}", result.stdout)
+        self.assertIn("Checkpoint: checkpoint-", result.stdout)
+        self.assertIn("Target Action: task.archive", result.stdout)
+        self.assertIn("Event ID: evt-review-checkpoint-", result.stdout)
+        self.assertIn("Controller State Changed: yes", result.stdout)
+        self.assertIn("Evidence Refs: bundle_dir=.codex/orchestration/checkpoints/", result.stdout)
+        self.assertIn(f"Next Action: macs task inspect --task {task_id}", result.stdout)
 
     def test_task_pause_human_readable_stacks_key_fields_on_narrow_no_color_terminals(self) -> None:
         self.init_repo()
