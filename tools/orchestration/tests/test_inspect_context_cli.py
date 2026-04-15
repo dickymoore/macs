@@ -92,6 +92,38 @@ class InspectContextCliContractTests(unittest.TestCase):
         docs_dir.mkdir(parents=True, exist_ok=True)
         (docs_dir / "inspect-checkpoint.md").write_text("inspect checkpoint context\n", encoding="utf-8")
 
+    def append_task_noise_events(self, task_id: str, *, count: int) -> None:
+        state_db = self.repo_root / ".codex" / "orchestration" / "state.db"
+        conn = sqlite3.connect(state_db)
+        try:
+            base = datetime.now(timezone.utc).replace(microsecond=0)
+            for index in range(count):
+                timestamp = (base + timedelta(seconds=index + 1)).isoformat()
+                conn.execute(
+                    """
+                    INSERT INTO events (
+                        event_id, event_type, aggregate_type, aggregate_id, timestamp,
+                        actor_type, actor_id, correlation_id, causation_id, payload, redaction_level
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f"evt-task-noise-{index:02d}",
+                        "task.noise",
+                        "task",
+                        task_id,
+                        timestamp,
+                        "controller",
+                        "controller-main",
+                        f"corr-task-noise-{index:02d}",
+                        None,
+                        json.dumps({"task_id": task_id, "note": index}, sort_keys=True),
+                        "none",
+                    ),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
     def seed_completed_task(self) -> str:
         create_result = self.run_cli("task", "create", "--summary", "Inspect archived task context", "--json")
         self.assertEqual(create_result.returncode, 0, create_result.stderr)
@@ -1661,6 +1693,44 @@ class InspectContextCliContractTests(unittest.TestCase):
         self.assertIn("Secret Scope Evidence:", human_result.stdout)
         self.assertIn("Checkpoint Evidence:", human_result.stdout)
         self.assertNotIn(scenario["runtime_secret"], human_result.stdout)
+
+    def test_event_inspect_does_not_backfill_later_checkpoint_evidence_onto_assignment_events(self) -> None:
+        scenario = self.seed_governed_task_context(close_task=True)
+
+        json_result = self.run_cli("event", "inspect", "--event", scenario["assign_event_id"], "--json")
+        self.assertEqual(json_result.returncode, 0, json_result.stderr)
+        payload = json.loads(json_result.stdout)
+
+        evidence = payload["data"]["governance_evidence"]
+        self.assertEqual(evidence["routing"]["related_event_id"], scenario["assign_event_id"])
+        self.assertNotIn("checkpoint", evidence)
+        self.assertNotIn("decision_event", evidence)
+
+        human_result = self.run_cli("event", "inspect", "--event", scenario["assign_event_id"])
+        self.assertEqual(human_result.returncode, 0, human_result.stderr)
+        self.assertIn("Governance Evidence:", human_result.stdout)
+        self.assertNotIn("Checkpoint Evidence:", human_result.stdout)
+        self.assertNotIn("Decision Linkage:", human_result.stdout)
+
+    def test_governance_evidence_keeps_routing_traceability_after_many_later_task_events(self) -> None:
+        scenario = self.seed_governed_task_context(close_task=True)
+        self.append_task_noise_events(scenario["task_id"], count=25)
+
+        task_result = self.run_cli("task", "inspect", "--task", scenario["task_id"], "--json")
+        self.assertEqual(task_result.returncode, 0, task_result.stderr)
+        task_payload = json.loads(task_result.stdout)
+        self.assertEqual(
+            task_payload["task"]["governance_evidence"]["routing"]["related_event_id"],
+            scenario["assign_event_id"],
+        )
+
+        event_result = self.run_cli("event", "inspect", "--event", scenario["close_event_id"], "--json")
+        self.assertEqual(event_result.returncode, 0, event_result.stderr)
+        event_payload = json.loads(event_result.stdout)
+        self.assertEqual(
+            event_payload["data"]["governance_evidence"]["routing"]["related_event_id"],
+            scenario["assign_event_id"],
+        )
 
     def test_task_inspect_surfaces_version_pin_rejection_governance_evidence(self) -> None:
         if shutil.which("tmux") is None:

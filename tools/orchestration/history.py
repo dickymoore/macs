@@ -401,20 +401,37 @@ def _inspect_task_workflow_class(state_db: Path, task_id: str) -> str | None:
     return row["workflow_class"]
 
 
-def _list_task_events_with_payload(state_db: Path, task_id: str, *, limit: int = 20) -> list[dict[str, object]]:
+def _list_task_events_with_payload(
+    state_db: Path,
+    task_id: str,
+    *,
+    limit: int | None = 20,
+) -> list[dict[str, object]]:
     conn = connect_state_db(state_db)
     try:
-        rows = conn.execute(
-            """
-            SELECT event_id, event_type, aggregate_type, aggregate_id, timestamp, actor_type,
-                   actor_id, correlation_id, causation_id, payload, redaction_level
-            FROM events
-            WHERE aggregate_id = ?
-            ORDER BY timestamp DESC, event_id DESC
-            LIMIT ?
-            """,
-            (task_id, limit),
-        ).fetchall()
+        if limit is None:
+            rows = conn.execute(
+                """
+                SELECT event_id, event_type, aggregate_type, aggregate_id, timestamp, actor_type,
+                       actor_id, correlation_id, causation_id, payload, redaction_level
+                FROM events
+                WHERE aggregate_id = ?
+                ORDER BY timestamp DESC, event_id DESC
+                """,
+                (task_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT event_id, event_type, aggregate_type, aggregate_id, timestamp, actor_type,
+                       actor_id, correlation_id, causation_id, payload, redaction_level
+                FROM events
+                WHERE aggregate_id = ?
+                ORDER BY timestamp DESC, event_id DESC
+                LIMIT ?
+                """,
+                (task_id, limit),
+            ).fetchall()
     finally:
         conn.close()
     return [_event_summary(row, include_payload=True) for row in rows]
@@ -784,7 +801,7 @@ def summarize_governance_evidence(
     routing_decision = (
         task.get("routing_decision") if isinstance(task, dict) and isinstance(task.get("routing_decision"), dict) else None
     ) or _inspect_latest_routing_decision(state_db, task_id)
-    task_events = _list_task_events_with_payload(state_db, task_id)
+    task_events = _list_task_events_with_payload(state_db, task_id, limit=None)
     routing_decision_id = str((routing_decision or {}).get("decision_id") or "") or None
     routing_related_event = (
         _match_task_event(task_events, payload_key="routing_decision_id", expected_value=routing_decision_id)
@@ -814,10 +831,13 @@ def summarize_governance_evidence(
             str((event or {}).get("decision_event_id") or ""),
         )
 
-    checkpoint = checkpoint_for_ref(state_db, event) if isinstance(event, dict) else None
-    if checkpoint is None:
+    event_checkpoint = checkpoint_for_ref(state_db, event) if isinstance(event, dict) else None
+    checkpoint = event_checkpoint
+    if checkpoint is None and not isinstance(event, dict):
         checkpoint = latest_task_checkpoint(state_db, task_id)
-    if decision_event is None and isinstance(checkpoint, dict):
+    if decision_event is None and isinstance(checkpoint, dict) and (
+        not isinstance(event, dict) or event_checkpoint is not None
+    ):
         decision_event = inspect_decision_event(state_db, str(checkpoint.get("decision_event_id") or ""))
 
     version_evidence = _surface_version_evidence(governance, routing_decision, related_event_id=routing_related_event_id)

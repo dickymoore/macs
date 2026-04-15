@@ -308,6 +308,13 @@ GPT-5 Codex
 - 2026-04-15T01:40:40+01:00: Added red regressions for read-only governance evidence reads and human-readable release-gate evidence refs; both failed against the pre-fix behavior as expected.
 - 2026-04-15T01:40:40+01:00: Removed bootstrap-time governance-policy rewrites from read-side inspect and release-review flows by keeping governance-policy sanitization in memory for bootstrap snapshots, governance evidence aggregation, and task-inspect worker-governance summaries while leaving durable sanitization on setup or write-side loaders.
 - 2026-04-15T01:40:40+01:00: Left the raw-secret dispatch-path comment and the prior checkpoint subsystem scope comment non-actionable for Story 2.3 because the required fix stayed within read-side evidence aggregation and release-gate rendering seams.
+- 2026-04-15T09:38:32+01:00: Removed the 20-event cap from read-side task-event evidence lookup so governance routing traceability survives heavy later task activity, reran the required focused and full unittest surfaces, and reconciled the lane-local tracker back to `review`.
+- 2026-04-15T09:48:39+01:00: Fixed review-found event attribution drift so `event inspect` no longer backfills a later checkpoint or intervention decision onto earlier routing or assignment events while task inspect and close-event evidence keep the expected linkage.
+- 2026-04-15T09:53:18+01:00: Revalidated the current worktree with the focused governance regressions, the required story suite, and full orchestration unittest discovery, then restored the lane-local tracker header and kept Story 2.3 at `review`.
+- 2026-04-15T10:06:14+01:00: Resumed the dev-story workflow for Story 2.3, reran the focused governance regressions plus the required story and full orchestration unittest suites, and restored the lane tracker comments and `review` state after the local tracker drifted back to `ready-for-dev`.
+- 2026-04-15T10:17:35+01:00: Completed the autonomous dev-story closeout pass, reran the required focused governance suite and full orchestration unittest discovery, and restored the commented lane tracker plus `review` state after the lane file drifted back to `ready-for-dev`.
+- 2026-04-15T10:22:05+01:00: Review-found the lane-local sprint tracker had drifted back to the stripped-header form, restored the required comments and spacing without changing story status, and kept Story 2.3 in `review` for the next Ralph loop decision.
+- 2026-04-15T10:26:49+01:00: Revalidated the current worktree with the required story suite and full orchestration unittest discovery, then restored the governance-hardening lane tracker header comments and `review` state after the local tracker drifted back to `ready-for-dev`.
 
 ### Test Record
 
@@ -323,6 +330,21 @@ GPT-5 Codex
 - 2026-04-15T01:40:40+01:00: `python3 -m unittest tools.orchestration.tests.test_release_gate_cli` — PASS (4 tests).
 - 2026-04-15T01:40:40+01:00: `python3 -m unittest tools.orchestration.tests.test_setup_init` — PASS (70 tests).
 - 2026-04-15T01:40:40+01:00: `python3 -m unittest discover -s tools/orchestration/tests` — PASS (217 tests).
+- 2026-04-15T09:38:32+01:00: `python3 -m unittest tools.orchestration.tests.test_task_lifecycle_cli tools.orchestration.tests.test_inspect_context_cli tools.orchestration.tests.test_release_gate_cli tools.orchestration.tests.test_setup_init` — PASS (198 tests).
+- 2026-04-15T09:38:32+01:00: `python3 -m unittest discover -s tools/orchestration/tests` — PASS (218 tests).
+- 2026-04-15T09:48:39+01:00: `python3 -m unittest tools.orchestration.tests.test_inspect_context_cli.InspectContextCliContractTests.test_event_inspect_surfaces_governance_evidence_and_decision_linkage_without_secret_leakage tools.orchestration.tests.test_inspect_context_cli.InspectContextCliContractTests.test_event_inspect_does_not_backfill_later_checkpoint_evidence_onto_assignment_events tools.orchestration.tests.test_inspect_context_cli.InspectContextCliContractTests.test_governance_evidence_keeps_routing_traceability_after_many_later_task_events` — PASS (3 tests).
+- 2026-04-15T09:48:39+01:00: `python3 -m unittest tools.orchestration.tests.test_task_lifecycle_cli tools.orchestration.tests.test_inspect_context_cli tools.orchestration.tests.test_release_gate_cli tools.orchestration.tests.test_setup_init` — PASS (199 tests).
+- 2026-04-15T09:48:39+01:00: `python3 -m unittest discover -s tools/orchestration/tests` — PASS (219 tests).
+- 2026-04-15T09:53:18+01:00: `python3 -m unittest tools.orchestration.tests.test_inspect_context_cli.InspectContextCliContractTests.test_event_inspect_surfaces_governance_evidence_and_decision_linkage_without_secret_leakage tools.orchestration.tests.test_inspect_context_cli.InspectContextCliContractTests.test_event_inspect_does_not_backfill_later_checkpoint_evidence_onto_assignment_events tools.orchestration.tests.test_inspect_context_cli.InspectContextCliContractTests.test_governance_evidence_keeps_routing_traceability_after_many_later_task_events` — PASS (3 tests).
+- 2026-04-15T09:53:18+01:00: `python3 -m unittest tools.orchestration.tests.test_task_lifecycle_cli tools.orchestration.tests.test_inspect_context_cli tools.orchestration.tests.test_release_gate_cli tools.orchestration.tests.test_setup_init` — PASS (199 tests).
+- 2026-04-15T09:53:18+01:00: `python3 -m unittest discover -s tools/orchestration/tests` — PASS (219 tests).
+- 2026-04-15T10:06:14+01:00: `python3 -m unittest tools.orchestration.tests.test_inspect_context_cli.InspectContextCliContractTests.test_event_inspect_surfaces_governance_evidence_and_decision_linkage_without_secret_leakage tools.orchestration.tests.test_inspect_context_cli.InspectContextCliContractTests.test_event_inspect_does_not_backfill_later_checkpoint_evidence_onto_assignment_events tools.orchestration.tests.test_inspect_context_cli.InspectContextCliContractTests.test_governance_evidence_keeps_routing_traceability_after_many_later_task_events` — PASS (3 tests).
+- 2026-04-15T10:06:14+01:00: `python3 -m unittest tools.orchestration.tests.test_task_lifecycle_cli tools.orchestration.tests.test_inspect_context_cli tools.orchestration.tests.test_release_gate_cli tools.orchestration.tests.test_setup_init` — PASS (199 tests).
+- 2026-04-15T10:06:14+01:00: `python3 -m unittest discover -s tools/orchestration/tests` — PASS (219 tests).
+- 2026-04-15T10:17:35+01:00: `python3 -m unittest tools.orchestration.tests.test_task_lifecycle_cli tools.orchestration.tests.test_inspect_context_cli tools.orchestration.tests.test_release_gate_cli tools.orchestration.tests.test_setup_init` — PASS (199 tests).
+- 2026-04-15T10:17:35+01:00: `python3 -m unittest discover -s tools/orchestration/tests` — PASS (219 tests).
+- 2026-04-15T10:26:49+01:00: `python3 -m unittest tools.orchestration.tests.test_task_lifecycle_cli tools.orchestration.tests.test_inspect_context_cli tools.orchestration.tests.test_release_gate_cli tools.orchestration.tests.test_setup_init` — PASS (199 tests).
+- 2026-04-15T10:26:49+01:00: `python3 -m unittest discover -s tools/orchestration/tests` — PASS (219 tests).
 
 ### Completion Notes List
 
@@ -332,6 +354,13 @@ GPT-5 Codex
 - Surfaced compact `governance_evidence` blocks in task and event inspect JSON plus human-readable output, including version-pin, secret-scope, checkpoint, and decision linkage details.
 - Extended `macs setup validate --release-gate` with a `governance_hardening` criterion, a governance-hardening report, and machine-readable sample evidence artifacts under the existing release-evidence package.
 - Added black-box inspect and release-gate regressions for governance-hardening evidence and verified the broader orchestration unittest suite stayed green.
+- Removed the task-event lookup cap in read-side governance evidence aggregation so task and event inspect retain routing traceability even after many later task events.
+- Fixed review-found event inspect attribution so earlier routing or assignment events no longer inherit later checkpoint or intervention-decision evidence from the same task.
+- Revalidated the current worktree after the latest governance-evidence fixes and restored the commented lane-local tracker file while keeping Story 2.3 in `review`.
+- Revalidated the resumed Story 2.3 worktree and restored the governance-hardening lane tracker comments plus `review` status after local tracker drift.
+- Revalidated the autonomous dev-story closeout pass and restored the governance-hardening lane tracker comments plus `review` status after the lane tracker drifted back to `ready-for-dev`.
+- Restored the governance-hardening lane tracker comments and structure after review caught another sprint-status sync drift, while keeping Story 2.3 in `review`.
+- Revalidated the current worktree with the required story suite and full orchestration unittest discovery, then restored the governance-hardening lane tracker comments plus `review` status after another lane-tracker drift.
 - No operator doc delta was required because the inspect and release-gate command families remained accurate after the additive evidence exposure changes.
 - Resolved the review follow-up that read-side inspect and release-review evidence reads must not rewrite `governance-policy.json`; task inspect now leaves the policy file unchanged while still keeping raw-secret fields out of inspect output.
 - Resolved the review follow-up that human-readable `macs setup validate --release-gate` must expose per-control `governance_hardening` evidence refs alongside outcomes so the CLI matches JSON evidence.
@@ -349,9 +378,21 @@ GPT-5 Codex
 - `tools/orchestration/tests/test_inspect_context_cli.py`
 - `tools/orchestration/tests/test_release_gate_cli.py`
 
+### Review Findings
+
+- [x] [Review][Patch] Stop `event inspect` from backfilling a later checkpoint or intervention decision onto earlier routing or assignment events [tools/orchestration/history.py:834]
+- [x] [Review][Patch] Restore the governance-hardening lane tracker comments and YAML spacing after sprint-status sync drift [_bmad-output/implementation-artifacts/sprint-status-macs-core-orchestration-governance-hardening.yaml:1]
+
 ### Change Log
 
 - 2026-04-15: Created Story 2.3 and moved the governance-hardening tracker entry from `backlog` to `ready-for-dev`.
 - 2026-04-15: Started implementation and moved Story 2.3 from `ready-for-dev` to `in-progress`.
 - 2026-04-15: Implemented governance evidence aggregation for inspect and release-gate surfaces, validated the focused governance suites, and moved Story 2.3 to `review`.
 - 2026-04-15: Addressed the Story 2.3 review follow-ups for read-only governance evidence reads and human-readable governance control evidence refs, reran the inspect, release-gate, and setup validation surface plus full orchestration discovery, and kept the story in `review`.
+- 2026-04-15: Fixed governance evidence routing traceability after heavy later task activity, reran the required focused validation and full orchestration discovery, and reconciled the lane-local tracker back to `review`.
+- 2026-04-15: Fixed review-found event inspect attribution drift for later checkpoint or decision linkage, added a regression for assignment-event inspection, and reran the required focused validation plus full orchestration discovery.
+- 2026-04-15: Revalidated the current worktree, restored the governance-hardening tracker comments and `review` status, and kept Story 2.3 ready for code review.
+- 2026-04-15: Resumed the autonomous dev-story run, revalidated the focused governance and full orchestration unittest suites, and restored the lane tracker comments plus `review` status after local tracker drift.
+- 2026-04-15: Completed the autonomous dev-story closeout pass, reran the required focused and full orchestration unittest suites, and restored the lane tracker comments plus `review` status after lane-tracker drift.
+- 2026-04-15: Review-found and fixed another governance-hardening lane tracker sync drift that had stripped the header comments and spacing, while leaving Story 2.3 in `review`.
+- 2026-04-15: Revalidated the current worktree with the required story suite and full orchestration unittest discovery, then restored the governance-hardening lane tracker comments and `review` status after another local tracker drift.
