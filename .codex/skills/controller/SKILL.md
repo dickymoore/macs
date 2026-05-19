@@ -122,6 +122,7 @@ EOF
 - Prefer `send.sh --submit-after --literal "text"` for single-line inputs.
 - Keep inputs single-line unless the prompt explicitly expects multi-line input.
 - Do not include leading blank lines in any input.
+- Never tell the worker to act as the user, act on the user's behalf, make product-owner decisions, or choose freely under delegated authority.
 - Never send Ctrl+C, Ctrl+D, Esc, or break sequences unless the human explicitly asks.
 - If you need to restart or manage session state for a fresh context, follow the model-specific runtime skill:
   - Codex: `codex-runtime`
@@ -148,6 +149,14 @@ EOF
 - Use the worker terminal (or a designated tool terminal) to run workflows, commands, and edits that the worker should perform.
 - If a skill instructs that a workflow must be run in the worker/tool terminal, follow it strictly.
 - Do not forward the human's request verbatim to the worker. You must interpret it, gather local context, and then issue **specific** step-by-step worker commands (especially for menu-driven workflows).
+
+### Non-Delegation of Authority
+- The Controller may act on behalf of the human user when the user has provided intent, priorities, or standing guidance.
+- The worker must never be told that it may act on behalf of the human user.
+- Do not delegate product ownership, judgment, approval authority, or responsibility to the worker.
+- Worker instructions must be concrete and bounded: perform a step, inspect files, produce an artifact, answer a specific question, or wait.
+- When the worker presents choices, the Controller must inspect the output, decide the response, and send only the selected option or specific instruction.
+- If user intent is needed, the Controller asks the human directly; the worker does not infer or decide user intent independently.
 
 ### Snapshot Discipline
 - Never fabricate worker output. Quote (briefly) the specific lines you saw that informed your decision.
