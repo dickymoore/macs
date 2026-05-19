@@ -13,7 +13,6 @@ source "$ROOT_DIR/common.sh"
 tmux_bridge_init_state "$ROOT_DIR"
 session=""
 pane=""
-pane_explicit=0
 lines="${TARGET_PANE_LINES:-200}"
 busy_lines="${TARGET_PANE_BUSY_LINES:-40}"
 label="${TARGET_PANE_LABEL:-worker}"
@@ -44,7 +43,6 @@ while [ $# -gt 0 ]; do
       ;;
     --pane)
       pane="$2"
-      pane_explicit=1
       shift 2
       ;;
     --lines)
