@@ -76,6 +76,7 @@ codex
 | `TARGET_PANE_SUBMIT_KEYS` | `Enter` | Keys to send after input |
 | `TARGET_PANE_TYPE_DELAY_MS` | `400` | Delay after typing before submit |
 | `TARGET_PANE_GUARD_BUSY` | `1` | Refuse to send if worker is busy |
+| `TARGET_PANE_REQUIRE_EXPLICIT_SESSION_ON_MULTI` | `0` | Refuse `send.sh` default-target sends when multiple matching sessions exist |
 | `TMUX_SOCKET` | (unset) | Optional tmux socket path for all scripts (`--socket` flag) |
 | `MACS_CODEX_ARGS` | (unset) | Extra args to pass to `codex` from `start_controller.sh` |
 | `MACS_CODEX_HOME` | (unset) | Override `CODEX_HOME` when `start_worker.sh` auto-launches Codex |
@@ -153,6 +154,8 @@ Run the tmux bridge smoke test (creates a temporary tmux server and cleans up af
 ```bash
 ./tools/tmux_bridge/tests/smoke.sh
 ```
+
+When multiple sessions contain panes matching the default worker label, `snapshot.sh`, `status.sh`, and `set_target.sh` warn before using the default target selection. `send.sh` also prints the resolved `session` and `pane`, and can refuse ambiguous default-target sends with `--require-explicit-session` or `TARGET_PANE_REQUIRE_EXPLICIT_SESSION_ON_MULTI=1`.
 
 ## Worker tmux defaults
 

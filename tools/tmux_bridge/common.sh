@@ -58,5 +58,64 @@ pane_in_listing() {
     return 1
   fi
 
-  awk -v pane="$pane" '$1 == pane { found = 1 } END { exit(found ? 0 : 1) }' <<<"$listing"
+  awk -F '\t' -v pane="$pane" '$1 == pane { found = 1 } END { exit(found ? 0 : 1) }' <<<"$listing"
+}
+
+pane_session_from_listing() {
+  local pane="$1"
+  local listing="$2"
+
+  if [ -z "$pane" ] || [ -z "$listing" ]; then
+    return 1
+  fi
+
+  awk -F '\t' -v pane="$pane" '$1 == pane { print $2; exit }' <<<"$listing"
+}
+
+matching_session_count_from_listing() {
+  local label="$1"
+  local listing="$2"
+
+  if [ -z "$label" ] || [ -z "$listing" ]; then
+    printf "0"
+    return 0
+  fi
+
+  awk -F '\t' -v label="$label" '
+    BEGIN {
+      IGNORECASE = 1
+    }
+    $0 ~ label {
+      seen[$2] = 1
+    }
+    END {
+      for (session in seen) {
+        count++
+      }
+      printf "%d", count + 0
+    }
+  ' <<<"$listing"
+}
+
+matching_sessions_from_listing() {
+  local label="$1"
+  local listing="$2"
+
+  if [ -z "$label" ] || [ -z "$listing" ]; then
+    return 0
+  fi
+
+  awk -F '\t' -v label="$label" '
+    BEGIN {
+      IGNORECASE = 1
+    }
+    $0 ~ label {
+      seen[$2] = 1
+    }
+    END {
+      for (session in seen) {
+        print session
+      }
+    }
+  ' <<<"$listing" | sort
 }

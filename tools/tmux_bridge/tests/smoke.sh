@@ -78,9 +78,11 @@ SNAPSHOT_1="$("$ROOT_DIR/snapshot.sh" --socket "$SOCKET" --session "$SESSION" --
 echo "$SNAPSHOT_1" | $RG_CMD -q "tmux-bridge-smoke"
 
 STATUS_OUT="$("$ROOT_DIR/status.sh" --socket "$SOCKET" --session "$SESSION")"
+echo "$STATUS_OUT" | $RG_CMD -q "Resolved target: session=$SESSION pane=$PANE_ID"
 echo "$STATUS_OUT" | $RG_CMD -q "IDLE|BUSY"
 
-"$ROOT_DIR/send.sh" --socket "$SOCKET" --session "$SESSION" "echo tmux-bridge-send" >/dev/null
+SEND_META="$("$ROOT_DIR/send.sh" --socket "$SOCKET" --session "$SESSION" "echo tmux-bridge-send" 2>&1 >/dev/null)"
+echo "$SEND_META" | $RG_CMD -q "Resolved target: session=$SESSION pane=$PANE_ID"
 sleep 0.2
 SNAPSHOT_2="$("$ROOT_DIR/snapshot.sh" --socket "$SOCKET" --session "$SESSION" --lines 20)"
 echo "$SNAPSHOT_2" | $RG_CMD -q "tmux-bridge-send"
@@ -109,7 +111,24 @@ if echo "$ALT_SNAPSHOT" | $RG_CMD -q "tmux-bridge-session-fallback"; then
   exit 1
 fi
 STATUS_OUT="$("$ROOT_DIR/status.sh" --socket "$SOCKET" --session "$SESSION")"
+echo "$STATUS_OUT" | $RG_CMD -q "Resolved target: session=$SESSION pane=$PANE_ID"
 echo "$STATUS_OUT" | $RG_CMD -q "IDLE|BUSY"
+
+rm -f "$TARGET_FILE"
+SNAPSHOT_WARN="$("$ROOT_DIR/snapshot.sh" --socket "$SOCKET" --lines 20 2>&1 >/dev/null)"
+echo "$SNAPSHOT_WARN" | $RG_CMD -q "Warning: multiple matching sessions found for label 'worker'"
+echo "$SNAPSHOT_WARN" | $RG_CMD -q "$ALT_SESSION|$SESSION"
+
+if "$ROOT_DIR/send.sh" --socket "$SOCKET" --require-explicit-session "echo should-not-send" >/dev/null 2>"$TMP_DIR/send-refuse.err"; then
+  echo "Expected ambiguous default-target send to be refused." >&2
+  exit 1
+fi
+REFUSE_OUT="$(cat "$TMP_DIR/send-refuse.err")"
+echo "$REFUSE_OUT" | $RG_CMD -q "Refusing to send without an explicit --session"
+
+SEND_WARN="$("$ROOT_DIR/send.sh" --socket "$SOCKET" "echo tmux-bridge-default-warning" 2>&1 >/dev/null)"
+echo "$SEND_WARN" | $RG_CMD -q "Warning: multiple matching sessions found for label 'worker'"
+echo "$SEND_WARN" | $RG_CMD -q "Resolved target: session="
 
 "$ROOT_DIR/start_controller.sh" --repo "$REPO_DIR" --tmux-socket "$SOCKET" --tmux-session "$SESSION" --skip-skills --no-codex >/dev/null
 
