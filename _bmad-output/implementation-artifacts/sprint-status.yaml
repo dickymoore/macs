@@ -1,0 +1,100 @@
+# generated: 2026-04-09T19:24:17+0100
+# last_updated: 2026-04-10T17:58:28+01:00
+# project: macs_dev
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: /home/codexuser/macs_dev/_bmad-output/implementation-artifacts/stories
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog -> in-progress: Automatically when first story is created (via create-story)
+#   - in-progress -> done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - SM typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review
+
+generated: 2026-04-09T19:24:17+0100
+last_updated: 2026-04-10T18:56:55+01:00
+project: macs_dev
+project_key: NOKEY
+tracking_system: file-system
+story_location: /home/codexuser/macs_dev/_bmad-output/implementation-artifacts/stories
+
+development_status:
+  epic-1: done
+  1-1-start-a-single-controller-orchestration-session: done
+  1-2-persist-authoritative-control-plane-entities: done
+  1-3-enforce-task-and-lease-state-invariants: done
+  1-4-restore-controller-state-safely-on-restart: done
+  epic-1-retrospective: done
+
+  epic-2: done
+  2-1-register-and-inspect-tmux-backed-workers: done
+  2-2-implement-the-shared-adapter-contract-and-evidence-envelope: done
+  2-3-deliver-the-codex-adapter-as-the-reference-worker: done
+  2-4-deliver-claude-and-gemini-adapters-as-governed-workers: done
+  2-5-deliver-the-local-adapter-and-first-class-qualification-checks: done
+  epic-2-retrospective: done
+
+  epic-3: done
+  3-1-configure-workflow-aware-routing-policy: done
+  3-2-record-explainable-assignment-decisions: done
+  3-3-reserve-protected-surfaces-with-coarse-default-locks: done
+  3-4-block-conflicts-and-duplicate-ownership-claims: done
+  epic-3-retrospective: done
+
+  epic-4: done
+  4-1-provide-compact-list-and-inspect-commands-for-control-plane-objects: done
+  4-2-assign-and-manage-task-lifecycle-actions-from-one-command-path: done
+  4-3-inspect-degraded-evidence-and-open-the-right-worker-pane-from-context: done
+  4-4-support-in-place-pause-controls-and-terminal-accessibility-modes: done
+  epic-4-retrospective: done
+
+  epic-5: done
+  5-1-classify-worker-health-and-surface-warnings-promptly: done
+  5-2-freeze-risky-work-through-intervention-hold-and-lease-suspension: done
+  5-3-reconcile-ambiguous-ownership-and-reroute-safely: done
+  5-4-resume-interrupted-recovery-from-persisted-recovery-runs: done
+  epic-5-retrospective: done
+
+  epic-6: done
+  6-1-persist-a-durable-event-trail-and-history-inspectors: done
+  6-2-preserve-intervention-rationale-across-recovery-and-reassignment: done
+  6-3-enforce-explicit-decision-rights-and-guarded-actions: done
+  6-4-govern-external-surfaces-privacy-sensitive-routing-and-audit-content: done
+  epic-6-retrospective: done
+
+  epic-7: done
+  7-1-separate-controller-adapter-policy-and-state-configuration: done
+  7-2-deliver-mixed-runtime-setup-and-validation-flow: done
+  7-3-preserve-and-document-single-worker-compatibility-boundaries: done
+  7-4-publish-contributor-facing-adapter-guidance: done
+  epic-7-retrospective: done
+
+  epic-8: done
+  8-1-build-unit-and-contract-test-coverage-for-controller-and-adapter-invariants: done
+  8-2-build-integration-and-failure-drill-coverage-for-mandatory-failure-classes: done
+  8-3-validate-the-four-worker-reference-dogfood-scenario: done
+  8-4-ship-a-release-gate-command-and-report-for-phase-1-readiness: done
+  epic-8-retrospective: done

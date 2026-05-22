@@ -1,219 +1,229 @@
 # MACS Architecture
 
-This document explains how MACS (Multi Agent Control System) works internally.
+This document explains the implemented MACS control plane. It is written for operators who want a reliable mental model and contributors who need to understand where authority, evidence, and recovery logic actually live.
 
-## Overview
+## Controller-First Model
 
-MACS enables a supervisory "controller" agent to oversee and direct a "worker" agent across separate terminals. The system uses tmux for terminal multiplexing and a Python bridge for communication routing.
+MACS is not just a tmux bridge. The bridge helpers still exist, but the implemented system is a controller-owned orchestration layer with durable state and explicit lifecycle rules.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      TMux Session                            │
-│  ┌──────────────────┐       ┌──────────────────┐            │
-│  │  Controller (A)  │       │   Worker (B)     │            │
-│  │                  │       │                  │            │
-│  │  - Codex         │       │  - Codex         │            │
-│  │  - /controller   │       │  - Task agent    │            │
-│  │  - Oversight     │       │  - Execution     │            │
-│  └────────┬─────────┘       └────────┬─────────┘            │
-│           │                          │                       │
-│           │    pipe-pane logging     │                       │
-│           ▼                          ▼                       │
-│  ┌────────────────────────────────────────────┐             │
-│  │              Bridge (Python)                │             │
-│  │  - Monitors worker log                     │             │
-│  │  - Detects request blocks                  │             │
-│  │  - Routes to controller                    │             │
-│  │  - Injects responses                       │             │
-│  └────────────────────────────────────────────┘             │
-└─────────────────────────────────────────────────────────────┘
-```
+The controller is authoritative for:
 
-## Components
+- `worker`
+- `task`
+- `lease`
+- `lock`
+- `event`
+- `recovery` context
 
-### 1. Controller Terminal
+Runtime adapters provide evidence and execution hooks. They do not become the source of truth for routing, ownership, or audit history.
 
-The controller runs a Codex session with the controller prompt loaded. It:
-- Makes high-level decisions
-- Reviews worker output
-- Provides guidance and instructions
-- Enforces security invariants
+## Control Plane Overview
 
-### 2. Worker Terminal
+```mermaid
+flowchart TB
+    operator["Operator"]
 
-The worker runs a Codex session (or any AI agent) that:
-- Executes tasks
-- Reports progress
-- Asks questions
-- Requests guidance when needed
+    subgraph cli["Operator Surface"]
+        setup["setup"]
+        worker["worker / adapter"]
+        task["task / lease / lock"]
+        event["event / overview / recovery"]
+    end
 
-### 3. Bridge
+    subgraph cp["Controller-Owned Control Plane"]
+        main["CLI Controller"]
+        routing["Routing + Policy"]
+        state["SQLite State Store"]
+        history["Event Log"]
+        health["Health + Intervention Logic"]
+        recovery["Recovery Engine"]
+    end
 
-The Python bridge (`bridge.py`) orchestrates communication:
-- Uses tmux `pipe-pane` to log terminal output
-- Parses logs for request delimiters
-- Routes requests to controller (various backends)
-- Injects responses back into worker terminal
+    subgraph adapters["Adapter Layer"]
+        codex["codex"]
+        claude["claude"]
+        gemini["gemini"]
+        local["local"]
+    end
 
-## Communication Protocol
+    subgraph tmux["tmux Sessions and Panes"]
+        w1["Worker Pane A"]
+        w2["Worker Pane B"]
+        w3["Worker Pane C"]
+        w4["Worker Pane D"]
+    end
 
-### Request Format
+    operator --> setup
+    operator --> worker
+    operator --> task
+    operator --> event
 
-Workers signal requests using delimited blocks:
+    setup --> main
+    worker --> main
+    task --> main
+    event --> main
 
-```
-<<CONTROLLER_REQUEST>>
-Request content here.
-Context and options.
-<<CONTROLLER_REQUEST_END>>
-```
+    main --> routing
+    main --> state
+    main --> history
+    main --> health
+    main --> recovery
 
-Optional attributes:
-```
-<<CONTROLLER_REQUEST id=abc123 type=question>>
-```
+    routing --> codex
+    routing --> claude
+    routing --> gemini
+    routing --> local
 
-### Response Format
+    health --> codex
+    health --> claude
+    health --> gemini
+    health --> local
 
-Controllers respond with structured output:
-
-```
-<<CONTROLLER_RESPONSE>>
-WORKER INSTRUCTIONS:
-Step-by-step guidance.
-
-NOTES:
-Context for human (not sent to worker).
-<<CONTROLLER_RESPONSE_END>>
+    codex --> w1
+    claude --> w2
+    gemini --> w3
+    local --> w4
 ```
 
-### Heuristic Triggers
+## Core Entities
 
-When enabled, the bridge also triggers on natural language patterns:
-- Questions ending with `?`
-- Phrases: "what would you like", "should i", "ready to proceed"
-- Completion: "done", "complete", "finished"
+| Entity | Authority | Why it exists |
+| --- | --- | --- |
+| `worker` | Controller | Tracks governed execution endpoints and current readiness |
+| `task` | Controller | Holds the current unit of work and lifecycle state |
+| `lease` | Controller | Records who owns a task now or who owned it previously |
+| `lock` | Controller | Protects write-sensitive surfaces from unsafe overlap |
+| `event` | Controller | Stores durable decisions, interventions, and state transitions |
+| adapter evidence | Adapter | Supplies facts, signals, or claims with freshness context |
 
-## Bridge Operation Modes
+The safety rule that shapes the rest of the architecture is simple: a task may have zero or one live lease, never more than one.
 
-### 1. Codex Interactive (Default)
+## Task and Lease Lifecycle
 
-```
-Worker ──request──> Bridge ──> Controller Codex ──response──> Bridge ──> Worker
-```
+The task surface and the lease surface move together, but they are not the same thing. A task describes work state. A lease describes ownership state.
 
-The bridge sends requests to a live Codex session in the controller terminal and waits for the response.
+```mermaid
+stateDiagram-v2
+    [*] --> draft
+    draft --> pending_assignment: task create
+    pending_assignment --> reserved: task assign
+    reserved --> active: delivery acknowledged
+    reserved --> pending_assignment: dispatch failed
 
-### 2. Codex Exec
+    active --> intervention_hold: task pause
+    intervention_hold --> active: task resume
 
-```
-Worker ──request──> Bridge ──> codex exec ──response──> Bridge ──> Worker
-```
+    active --> reconciliation: degraded evidence or interrupted recovery
+    reconciliation --> active: recovery retry succeeds
+    reconciliation --> pending_assignment: reroute or reconcile for reassignment
 
-The bridge invokes `codex exec` for one-shot responses without maintaining a session.
+    active --> completed: task close
+    active --> aborted: task abort
+    active --> failed: unrecoverable failure
+    failed --> reconciliation: operator recovery path
 
-### 3. Manual Mode
-
-```
-Worker ──request──> Bridge ──> inbox/*.txt
-                                    │
-                                    ▼ (human writes response)
-                               outbox/*.txt ──> Bridge ──> Worker
-```
-
-Requests are written to files; humans (or other systems) write responses.
-
-## TMux Integration
-
-### Pane Discovery
-
-The bridge discovers panes by searching for:
-1. Explicit pane ID (`--worker-pane %3`)
-2. Pinned pane (`.codex/target-pane.txt`, with legacy fallback from `tools/tmux_bridge/target_pane.txt`)
-3. Window/pane name containing label
-4. Process command containing "codex"
-
-### Output Capture
-
-```bash
-tmux pipe-pane -o -t %3 "cat >> /tmp/macs-worker.log"
+    completed --> archived: task archive
+    aborted --> archived: task archive
+    failed --> archived: task archive
+    archived --> [*]
 ```
 
-This streams all pane output to a log file that the bridge monitors.
+This is why pause, reroute, abort, retry, and reconcile live on controller-owned command paths. They are not UI shortcuts over raw tmux actions. They are explicit lifecycle transitions with durable history.
 
-### Input Injection
+## Assignment Flow
 
-```bash
-# Short messages
-tmux send-keys -t %3 "message" Enter
+Assignment is evidence-backed and lock-aware. MACS does not treat "worker is present" as enough proof to route work safely.
 
-# Long messages (>1000 chars)
-tmux load-buffer -b buf - <<< "message"
-tmux paste-buffer -t %3 -b buf
-tmux send-keys -t %3 Enter
+```mermaid
+sequenceDiagram
+    actor Operator
+    participant CLI as macs task assign
+    participant Controller as Controller
+    participant Store as State Store
+    participant Router as Routing Engine
+    participant Adapter as Runtime Adapter
+    participant Worker as Worker Pane
+    participant Events as Event Log
+
+    Operator->>CLI: assign task
+    CLI->>Controller: validate command
+    Controller->>Store: read task, lease, and lock state
+    Store-->>Controller: current controller truth
+    Controller->>Router: evaluate policy, capabilities, freshness, governance
+    Router-->>Controller: selected worker and rationale
+    Controller->>Store: reserve lease and locks
+    Controller->>Adapter: dispatch work
+    Adapter->>Worker: deliver task payload
+    Worker-->>Adapter: acknowledge or fail
+    Adapter-->>Controller: delivery evidence
+    Controller->>Store: promote lease and task state
+    Controller->>Events: persist assignment and decision events
+    Controller-->>Operator: result, event id, next action
 ```
 
-### Busy Detection
+## Intervention and Recovery Flow
 
-The bridge checks for "esc to interrupt" in recent output to determine if the worker is still processing:
+Intervention and recovery are part of the normal control plane. They are not side channels.
 
-```bash
-tmux capture-pane -p -t %3 -S -40 | grep -qi "esc to interrupt"
+```mermaid
+sequenceDiagram
+    actor Operator
+    participant Inspect as task/recovery inspect
+    participant Controller as Controller
+    participant Store as State Store
+    participant Adapter as Runtime Adapter
+    participant Events as Event Log
+
+    Operator->>Inspect: inspect degraded task
+    Inspect->>Controller: load controller truth and evidence
+    Controller->>Store: read task, lease, lock, and recovery state
+    Store-->>Controller: current state
+    Controller-->>Operator: allowed next actions
+
+    Operator->>Controller: pause, reroute, retry, or reconcile
+    Controller->>Store: record operator decision
+    Controller->>Adapter: best-effort runtime side effect
+    Adapter-->>Controller: success, warning, or unsupported depth
+    Controller->>Store: persist safe resulting state
+    Controller->>Events: append durable audit trail
+    Controller-->>Operator: resulting state plus next action
 ```
 
-## File Structure
+## Storage and Evidence
 
-```
-tools/tmux_bridge/
-├── bridge.py           # Main orchestration
-├── snapshot.sh         # Capture pane output
-├── send.sh            # Send input to pane
-├── status.sh          # Check busy/idle
-├── set_target.sh      # Pin target pane
-├── start_*.sh         # Session setup
-├── controller_prompt.txt  # System prompt
-├── inbox/             # Incoming requests
-├── outbox/            # Outgoing responses
-└── archive/           # Historical data
+Repo-local state lives under `.codex/orchestration/`.
 
-<repo>/.codex/
-├── tmux-session.txt   # Auto-target tmux session
-├── tmux-socket.txt    # Auto-target tmux socket
-└── target-pane.txt    # Pinned pane (runtime)
-```
+| Path | Purpose |
+| --- | --- |
+| `controller.lock` | Exclusive controller lock for the repo-local session |
+| `state.db` | Authoritative SQLite state store |
+| `events.ndjson` | Append-friendly export of durable events |
+| `controller-defaults.json` | Controller defaults such as task creation defaults |
+| `adapter-settings.json` | Adapter enablement and config references |
+| `routing-policy.json` | Workflow-aware routing defaults |
+| `governance-policy.json` | Governed-surface and audit-content policy |
+| `state-layout.json` | State-path map and compatibility references |
 
-## Request Deduplication
+Compatibility files such as `.codex/tmux-session.txt`, `.codex/tmux-socket.txt`, and `.codex/target-pane.txt` still matter. They remain part of targeting behavior, but not part of authoritative orchestration state.
 
-Requests are deduplicated using SHA1 hashes to prevent processing the same request twice (e.g., if it appears in scrollback).
+## Implementation Map
 
-## Response Splitting
+| Area | Primary files |
+| --- | --- |
+| CLI entrypoints | `tools/orchestration/cli/main.py`, `tools/orchestration/cli/rendering.py` |
+| Setup and validation | `tools/orchestration/setup.py`, `tools/orchestration/config.py`, `tools/orchestration/session.py` |
+| Task lifecycle | `tools/orchestration/tasks.py`, `tools/orchestration/interventions.py` |
+| Routing and policy | `tools/orchestration/routing.py`, `tools/orchestration/policy.py` |
+| Worker governance | `tools/orchestration/workers.py`, `tools/orchestration/health.py` |
+| Recovery | `tools/orchestration/recovery.py` |
+| Audit and history | `tools/orchestration/history.py`, `tools/orchestration/overview.py` |
+| State and invariants | `tools/orchestration/store.py`, `tools/orchestration/invariants.py`, `tools/orchestration/state_machine.py` |
+| Adapters | `tools/orchestration/adapters/` |
+| Bridge helpers | `tools/tmux_bridge/` |
 
-By default, responses are split:
-- `WORKER INSTRUCTIONS:` - Sent to worker terminal
-- `NOTES:` - Printed locally (not sent to worker)
+## What to Read Next
 
-This allows the controller to communicate privately with the human operator.
-
-## Security Considerations
-
-1. **Isolation**: Controller and worker run in separate terminals
-2. **Audit Trail**: All requests/responses archived
-3. **Guard Rails**: Controller prompt enforces security invariants
-4. **Busy Protection**: Won't send to busy worker by default
-
-## Extending MACS
-
-### Custom Backends
-
-Implement a new backend by:
-1. Adding a choice to `--controller-backend`
-2. Implementing `run_<backend>_controller(block_text, args)`
-3. Returning response text
-
-### Custom Triggers
-
-Modify `is_heuristic_trigger()` and related regexes to detect additional patterns.
-
-### Multiple Workers
-
-Run multiple bridges with different `--worker-pane` and `--log` values to supervise multiple workers from one controller.
+- [Using MACS](./user-guide.md) for the operator-facing command families
+- [How-To Recipes](./how-tos.md) for step-by-step flows
+- [Contributor Guide](./contributor-guide.md) for repo structure and validation
+- [Adapter Contributor Guide](./adapter-contributor-guide.md) for runtime integration work
